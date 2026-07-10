@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# SegMoTE generated checkpoints and model weights
+SegMoTE/checkpoints/
+SegMoTE/checkpoint/
+SegMoTE/outputs/
+SegMoTE/runs/
+SegMoTE/**/*.ckpt
+SegMoTE/**/*.pth
+SegMoTE/**/*.pt
+SegMoTE/**/*.safetensors
+SegMoTE/**/*.bin
