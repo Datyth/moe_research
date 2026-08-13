@@ -12,10 +12,16 @@ wheels/
 # SegMoTE generated checkpoints and model weights
 SegMoTE/checkpoints/
 SegMoTE/checkpoint/
+SegMoTE/dataset/
+SegMoTE/raw_data/
 SegMoTE/outputs/
 SegMoTE/runs/
+SegMoTE/work_dir/
 SegMoTE/**/*.ckpt
 SegMoTE/**/*.pth
 SegMoTE/**/*.pt
 SegMoTE/**/*.safetensors
 SegMoTE/**/*.bin
+
+.python-version
+.DS_Store
