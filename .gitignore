@@ -27,3 +27,6 @@ SegMoTE/**/*.bin
 .DS_Store
 
 dataset
+
+# Generated training checkpoints
+checkpoints/

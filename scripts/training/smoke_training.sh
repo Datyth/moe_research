@@ -31,5 +31,5 @@ python train.py \
   --device "$DEVICE" \
   --gpu_ids 0 \
   --mask_num 1 \
-  -num_workers 0 \
+  -num_workers 8 \
   --pretrain_path "$CHECKPOINT"
