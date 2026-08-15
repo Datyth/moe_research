@@ -202,11 +202,11 @@ def main() -> None:
         copy_images=args.copy_images,
     )
 
-    validation_records = convert_split(
+    test_records = convert_split(
         image_dir=args.val_images.resolve(),
         mask_dir=args.val_masks.resolve(),
         output_root=output_root,
-        split_name="val",
+        split_name="test",
         make_pseudo=False,
         copy_images=args.copy_images,
     )
@@ -217,7 +217,7 @@ def main() -> None:
             "1": "skin lesion",
         },
         "training": training_records,
-        "test": validation_records,
+        "test": test_records,
     }
 
     dataset_json_path = output_root / "dataset.json"
@@ -232,7 +232,7 @@ def main() -> None:
 
     print(f"Dataset JSON: {dataset_json_path}")
     print(f"Training samples: {len(training_records)}")
-    print(f"Validation samples: {len(validation_records)}")
+    print(f"Test samples: {len(test_records)}")
 
 
 if __name__ == "__main__":

@@ -25,3 +25,5 @@ SegMoTE/**/*.bin
 
 .python-version
 .DS_Store
+
+dataset
