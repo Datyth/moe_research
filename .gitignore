@@ -30,3 +30,6 @@ dataset
 
 # Generated training checkpoints
 checkpoints/
+
+# Generated evaluation metrics and visualizations
+results/
