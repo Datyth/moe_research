@@ -4,9 +4,9 @@ Framework thực nghiệm deep learning cho medical image segmentation, được
 
 ## Current Working
 
-> Cập nhật lần cuối: 2026-08-15 18:03:56 +07 (UTC+07:00)
+> Cập nhật lần cuối: 2026-08-23 +07 (UTC+07:00)
 >
-> Commit cơ sở: 49c71a6
+> Commit cơ sở: 4aaa854
 > Quy ước: cập nhật timestamp và checklist sau mỗi mốc công việc.
 
 ### Đã hoàn thành
@@ -14,29 +14,25 @@ Framework thực nghiệm deep learning cho medical image segmentation, được
 - [x] Model API dùng chung: BaseSegmentationModel, SegmentationOutput và model registry.
 - [x] Baseline UNet cho binary segmentation.
 - [x] Dataset API, dataset registry và DatasetConfig dùng chung.
-- [x] ISIC 2018 loader với split train/test và sparse mask.
+- [x] ISIC 2018 loader với deterministic split train/validation/test và sparse mask.
 - [x] Transform đồng bộ image–mask: resize, augmentation và normalization.
 - [x] Binary losses: BCE, Dice và BCE + Dice.
-- [x] Trainer cơ bản dùng được cho model trả Tensor hoặc output có thuộc tính logits.
-- [x] CUDA AMP, AdamW training và lưu checkpoint model/optimizer/scaler.
-- [x] Unit/smoke tests cho model, dataset, transform, losses và trainer.
-- [x] Train thử UNet một epoch trên NVIDIA RTX PRO 4000 Blackwell.
-  - 2.594 training samples.
-  - Image size 256 × 256.
-  - Mean training loss: 0.495141.
-  - Checkpoint local: checkpoints/unet_initial.pt.
-
-### Đang thực hiện
-
-- [ ] Tối ưu data pipeline để giảm thời gian GPU chờ CPU.
-- [ ] Giảm các điểm đồng bộ CPU–GPU không cần thiết trong Trainer.
-- [ ] Chuẩn hóa entrypoint/config để thay model mà không cần viết lại training script.
+- [x] Binary evaluator với sample-mean Dice/IoU và sample-weighted loss.
+- [x] Validation mỗi epoch, best/last checkpoint và JSON training history.
+- [x] CUDA AMP, AdamW training và checkpoint tự mô tả model/data/loss config.
+- [x] Test evaluation CLI và visualization Input/GT/Prediction/Overlay.
+- [x] Unit/smoke tests cho model, dataset, transform, losses, evaluator và trainer.
+- [x] GPU smoke end-to-end một epoch trên NVIDIA RTX PRO 4000 Blackwell.
+  - 2.075 train, 519 validation và 100 test samples; image size 256 × 256.
+  - Train loss 0.529859; validation loss 0.468268.
+  - Validation Dice/IoU: 0.729197/0.613759.
+  - Test loss 0.450153; test Dice/IoU: 0.740456/0.620748.
+  - Output local: `checkpoints/smoke/` và `results/smoke/`.
 
 ### Tiếp theo
 
-- [ ] Thêm validation split độc lập; không dùng test set để tuning.
-- [ ] Viết evaluator và metrics Dice/IoU.
-- [ ] Hỗ trợ resume training và best/last checkpoint.
+- [ ] Chạy baseline UNet dài hạn và ghi nhận test metrics chính thức.
+- [ ] Hỗ trợ resume training và LR scheduler.
 - [ ] Thêm model mới thông qua base class và registry.
 - [ ] Thêm experiment config chung cho model, dataset, loss, optimizer và trainer.
 - [ ] Đưa SegMoTE vào framework dưới dạng model adapter sau khi baseline chung ổn định.
@@ -91,15 +87,17 @@ src/
     ├── test_model.py
     ├── test_dataset.py
     ├── test_losses.py
-    └── test_trainer.py
+    ├── test_trainer.py
+    └── test_evaluator.py
 
 scripts/
-├── training/
-│   └── train_unet.py
-└── ...
+├── data/prepare_isic2018.py
+├── training/train_unet.py
+└── evaluation/evaluate.py
 
 dataset/       # local data, ignored by Git
 checkpoints/   # generated checkpoints, ignored by Git
+results/       # metrics/history/visualizations, ignored by Git
 SegMoTE/       # external/reference implementation
 ~~~
 
@@ -145,9 +143,19 @@ dataset/isic2018_task1/
 
 Mask được lưu dưới dạng sparse NPZ và được đọc bằng scipy.sparse.load_npz.
 
-Lưu ý: split test hiện được tạo từ official validation archive của ISIC 2018. Không sử dụng split này để chọn hyperparameter. Cần tách validation từ training set trước khi chạy thực nghiệm chính thức.
+Tạo hoặc cập nhật deterministic validation split:
 
-Các script trong scripts/01_prepare_segmote.sh và scripts/02_prepare_isic2018_dataset.sh thuộc workflow baseline/reference cũ. Cần tiếp tục chuẩn hóa data-preparation entrypoint cho generic pipeline.
+~~~bash
+python scripts/data/prepare_isic2018.py --val-ratio 0.2 --seed 42
+~~~
+
+Manifest chứa `training`, `validation` và `test`. Validation là 20% official training records và tham chiếu các file vật lý trong `images/train`/`labels/train`, nên không nhân bản dữ liệu. Split test đến từ official ISIC 2018 validation archive và chỉ dùng cho đánh giá cuối.
+
+Để tải, giải nén và chuẩn bị dữ liệu từ đầu:
+
+~~~bash
+bash scripts/02_prepare_isic2018_dataset.sh
+~~~
 
 ## Chạy tests
 
@@ -164,9 +172,10 @@ python src/tests/test_model.py
 python src/tests/test_dataset.py
 python src/tests/test_losses.py
 python src/tests/test_trainer.py
+python src/tests/test_evaluator.py
 ~~~
 
-Trạng thái gần nhất: 10 tests passed.
+Trạng thái gần nhất: 18 tests passed.
 
 ## Train UNet
 
@@ -178,11 +187,18 @@ python scripts/training/train_unet.py \
   --image-size 256 \
   --batch-size 16 \
   --num-workers 8 \
-  --device cuda \
-  --checkpoint checkpoints/unet_initial.pt
+  --device cuda
 ~~~
 
 Không nhầm image size với batch size. Với pipeline hiện tại, batch size 16–32 phù hợp hơn batch size 256 vì image decode, sparse-mask conversion và resize vẫn chạy trên CPU.
+
+Mỗi epoch chạy validation và cập nhật:
+
+~~~text
+checkpoints/unet_best.pt
+checkpoints/unet_last.pt
+results/unet_training_history.json
+~~~
 
 Checkpoint chứa:
 
@@ -190,8 +206,31 @@ Checkpoint chứa:
 - Model state dict.
 - Optimizer state dict.
 - AMP scaler state.
-- Mean training loss.
+- Train loss, validation loss, Dice và IoU.
+- Best validation Dice.
 - Trainer config.
+- Model/data/loss metadata để evaluation dựng lại đúng experiment.
+
+## Evaluate checkpoint
+
+~~~bash
+python scripts/evaluation/evaluate.py \
+  --checkpoint checkpoints/unet_best.pt \
+  --split test \
+  --output-dir results/unet_test \
+  --num-visualizations 12
+~~~
+
+Output:
+
+~~~text
+results/unet_test/
+├── metrics.json
+└── visualizations/
+    └── ISIC_xxx.png
+~~~
+
+Mỗi visualization gồm bốn panel: Input, Ground Truth, Prediction và Boundary Overlay. Panel cuối vẽ biên ground truth màu xanh lá, biên prediction màu đỏ và phần biên trùng nhau màu vàng trực tiếp trên input để làm rõ sai số. Checkpoint UNet cũ không có metadata vẫn được hỗ trợ với fallback `base_channels=32`, image size 256 và BCE+Dice 0.5/0.5; có thể override bằng CLI.
 
 ## Thêm model mới
 
