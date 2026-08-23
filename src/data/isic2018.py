@@ -22,6 +22,7 @@ class ISIC2018Dataset(BaseSegmentationDataset):
 
     MANIFEST_SPLITS = {
         "train": "training",
+        "val": "validation",
         "test": "test",
     }
 

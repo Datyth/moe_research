@@ -22,6 +22,7 @@ from src.data import (
     SegmentationTransform,
     build_dataset,
 )
+from scripts.data.prepare_isic2018 import split_training_records
 
 
 class TestISIC2018Dataset(unittest.TestCase):
@@ -31,10 +32,12 @@ class TestISIC2018Dataset(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         self._create_split("train", "ISIC_TEST_TRAIN")
+        self._create_split("train", "ISIC_TEST_VAL")
         self._create_split("test", "ISIC_TEST")
 
         manifest = {
             "training": [self._record("train", "ISIC_TEST_TRAIN")],
+            "validation": [self._record("train", "ISIC_TEST_VAL")],
             "test": [self._record("test", "ISIC_TEST")],
         }
         (self.root / "dataset.json").write_text(
@@ -53,6 +56,10 @@ class TestISIC2018Dataset(unittest.TestCase):
                     "images/train",
                     "labels/train",
                 ),
+                "val": DatasetSplitConfig(
+                    "images/train",
+                    "labels/train",
+                ),
                 "test": DatasetSplitConfig(
                     "images/test",
                     "labels/test",
@@ -66,8 +73,8 @@ class TestISIC2018Dataset(unittest.TestCase):
     def _create_split(self, split: str, sample_id: str):
         image_directory = self.root / "images" / split
         mask_directory = self.root / "labels" / split
-        image_directory.mkdir(parents=True)
-        mask_directory.mkdir(parents=True)
+        image_directory.mkdir(parents=True, exist_ok=True)
+        mask_directory.mkdir(parents=True, exist_ok=True)
 
         image = np.zeros((24, 40, 3), dtype=np.uint8)
         image[:, :20, 0] = 255
@@ -146,6 +153,49 @@ class TestISIC2018Dataset(unittest.TestCase):
 
         self.assertEqual(batch["image"].shape, (1, 3, 32, 32))
         self.assertEqual(batch["mask"].shape, (1, 1, 32, 32))
+
+    def test_validation_split_contract(self):
+        dataset = build_dataset(self.config, split="val")
+        sample = dataset[0]
+
+        self.assertEqual(len(dataset), 1)
+        self.assertEqual(sample["sample_id"], "ISIC_TEST_VAL")
+        self.assertEqual(sample["image"].shape, (3, 32, 32))
+        self.assertEqual(sample["mask"].shape, (1, 32, 32))
+
+    def test_manifest_split_is_deterministic_and_disjoint(self):
+        records = [
+            {"image": f"images/train/ISIC_{index:04d}.jpg", "label": str(index)}
+            for index in range(10)
+        ]
+
+        first_train, first_val = split_training_records(
+            records,
+            val_ratio=0.2,
+            seed=42,
+        )
+        repeated_train, repeated_val = split_training_records(
+            first_val + first_train,
+            val_ratio=0.2,
+            seed=42,
+        )
+        _, different_val = split_training_records(
+            records,
+            val_ratio=0.2,
+            seed=43,
+        )
+
+        first_train_ids = {record["image"] for record in first_train}
+        first_val_ids = {record["image"] for record in first_val}
+        self.assertEqual(len(first_train), 8)
+        self.assertEqual(len(first_val), 2)
+        self.assertFalse(first_train_ids & first_val_ids)
+        self.assertEqual(first_train_ids | first_val_ids, {
+            record["image"] for record in records
+        })
+        self.assertEqual(first_train, repeated_train)
+        self.assertEqual(first_val, repeated_val)
+        self.assertNotEqual(first_val, different_val)
 
 
 if __name__ == "__main__":

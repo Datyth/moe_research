@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RAW_DIR="$ROOT_DIR/SegMoTE/raw_data/isic2018"
-OUT_DIR="$ROOT_DIR/SegMoTE/dataset/isic2018_task1"
+OUT_DIR="$ROOT_DIR/dataset/isic2018_task1"
 
 download() {
   local url="$1"
@@ -37,11 +37,13 @@ unzip -n -q ISIC2018_Task1_Validation_GroundTruth.zip
 
 cd "$ROOT_DIR"
 
-python SegMoTE/tools/prepare_isic2018.py \
-  --train_images "$RAW_DIR/ISIC2018_Task1-2_Training_Input" \
-  --train_masks "$RAW_DIR/ISIC2018_Task1_Training_GroundTruth" \
-  --val_images "$RAW_DIR/ISIC2018_Task1-2_Validation_Input" \
-  --val_masks "$RAW_DIR/ISIC2018_Task1_Validation_GroundTruth" \
-  --output "$OUT_DIR"
+python scripts/data/prepare_isic2018.py \
+  --train-images "$RAW_DIR/ISIC2018_Task1-2_Training_Input" \
+  --train-masks "$RAW_DIR/ISIC2018_Task1_Training_GroundTruth" \
+  --test-images "$RAW_DIR/ISIC2018_Task1-2_Validation_Input" \
+  --test-masks "$RAW_DIR/ISIC2018_Task1_Validation_GroundTruth" \
+  --data-root "$OUT_DIR" \
+  --val-ratio 0.2 \
+  --seed 42
 
 find "$OUT_DIR" -maxdepth 2 -type d
