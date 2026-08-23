@@ -21,7 +21,7 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${TMPDIR:-/tmp}/moe-cache}"
 mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 python test.py \
-  --data_dir dataset \
+  --data_dir ../dataset \
   --dataset_list isic2018_task1 \
   --work_dir work_dir \
   --task_name valid_isic2018 \
