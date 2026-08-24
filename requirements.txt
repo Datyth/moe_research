@@ -1,0 +1,15 @@
+huggingface-hub
+matplotlib
+monai
+numpy
+opencv-python
+pandas
+Pillow
+scikit-image
+PyYAML
+scipy
+timm
+torch
+torchvision
+tqdm
+transformers

@@ -1,0 +1,46 @@
+experiment:
+  name: unet_isic2018
+  output_root: runs
+
+seed: 42
+
+dataset:
+  name: isic2018
+  root: dataset/isic2018_task1
+  manifest: manifests/isic2018_task1_v1.json
+  version: isic2018-task1-v1
+  task: binary
+  num_classes: 1
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  mask_threshold: 0.5
+
+model:
+  name: unet
+  base_channels: 32
+
+loss:
+  name: bce_dice
+  bce_weight: 0.5
+  dice_weight: 0.5
+
+optimizer:
+  name: adamw
+  lr: 0.0001
+  weight_decay: 0.00001
+
+scheduler:
+  name: cosine
+  eta_min: 0.0
+
+training:
+  epochs: 50
+  batch_size: 16
+  num_workers: 8
+  device: cuda
+  amp: true
+  prediction_threshold: 0.5
+  log_interval: 20
+  gradient_clip_norm: null
