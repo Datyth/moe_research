@@ -33,8 +33,8 @@ class BaseSegmentationModel(nn.Module, ABC):
         self.task = task
 
     @abstractmethod
-    def forward(self, images: Tensor, **kwargs):
-        """Return raw, unnormalized logits."""
+    def forward(self, images: Tensor, **kwargs) -> SegmentationOutput:
+        """Return raw, unnormalized logits in a SegmentationOutput."""
         raise NotImplementedError
 
     
@@ -45,6 +45,11 @@ class BaseSegmentationModel(nn.Module, ABC):
             self.eval()
             output = self(images, **kwargs)
 
+            if not isinstance(output, SegmentationOutput):
+                raise TypeError(
+                    "Model forward must return SegmentationOutput, got "
+                    f"{type(output).__name__}."
+                )
             if self.task == "multiclass":
                 probabilities = output.logits.softmax(dim = 1)
                 masks = probabilities.argmax(dim = 1)

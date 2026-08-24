@@ -24,11 +24,11 @@ from torch.utils.data import DataLoader
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.configs.dataset import DatasetConfig, DatasetSplitConfig
+from src.configs.dataset import DatasetConfig
 from src.data import build_dataset
 from src.engine import evaluate
-from src.losses import BCEDiceLoss
-from src.models import build_model
+from src.losses import build_loss
+from src.models import SegmentationOutput, build_model
 
 
 DEFAULT_MODEL_CONFIG: dict[str, Any] = {
@@ -111,11 +111,6 @@ def _checkpoint_configs(
     saved_loss_config = metadata.get("loss_config")
     if isinstance(saved_loss_config, dict):
         loss_config.update(saved_loss_config)
-    if loss_config.get("name") != "bce_dice":
-        raise ValueError(
-            f"Unsupported loss configuration: {loss_config.get('name')!r}."
-        )
-
     saved_trainer_config = checkpoint.get("trainer_config")
     saved_threshold = None
     if isinstance(saved_trainer_config, dict):
@@ -139,6 +134,10 @@ def _build_dataset_config(
     return DatasetConfig(
         name=str(data_config["name"]),
         root=data_root,
+        manifest=Path(
+            data_config.get("manifest", data_root / "dataset.json")
+        ),
+        version=str(data_config.get("version", "legacy-unversioned")),
         task=str(data_config["task"]),
         num_classes=int(data_config["num_classes"]),
         in_channels=int(data_config["in_channels"]),
@@ -146,20 +145,15 @@ def _build_dataset_config(
         image_mean=tuple(float(value) for value in data_config["image_mean"]),
         image_std=tuple(float(value) for value in data_config["image_std"]),
         mask_threshold=float(data_config["mask_threshold"]),
-        splits={
-            "val": DatasetSplitConfig("images/train", "labels/train"),
-            "test": DatasetSplitConfig("images/test", "labels/test"),
-        },
     )
 
 
 def _extract_logits(output: Any) -> Tensor:
-    if isinstance(output, Tensor):
-        return output
-    if hasattr(output, "logits"):
+    if isinstance(output, SegmentationOutput):
         return output.logits
     raise TypeError(
-        "Model output must be a Tensor or expose a 'logits' attribute."
+        "Model forward must return SegmentationOutput, got "
+        f"{type(output).__name__}."
     )
 
 
@@ -325,10 +319,7 @@ def main() -> None:
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     device = torch.device(args.device)
     model.to(device)
-    criterion = BCEDiceLoss(
-        bce_weight=float(loss_config["bce_weight"]),
-        dice_weight=float(loss_config["dice_weight"]),
-    )
+    criterion = build_loss(loss_config)
 
     metrics = evaluate(
         model=model,

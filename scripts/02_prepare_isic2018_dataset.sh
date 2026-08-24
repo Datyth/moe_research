@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RAW_DIR="$ROOT_DIR/SegMoTE/raw_data/isic2018"
+RAW_DIR="$ROOT_DIR/dataset/raw/isic2018"
 OUT_DIR="$ROOT_DIR/dataset/isic2018_task1"
 
 download() {
@@ -18,12 +18,6 @@ download() {
 
 mkdir -p "$RAW_DIR"
 cd "$RAW_DIR"
-
-if [ -f "$ROOT_DIR/SegMoTE/.venv/bin/activate" ]; then
-  source "$ROOT_DIR/SegMoTE/.venv/bin/activate"
-elif [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
-  source "$ROOT_DIR/.venv/bin/activate"
-fi
 
 download "https://isic-archive.s3.amazonaws.com/challenges/2018/ISIC2018_Task1-2_Training_Input.zip"
 download "https://isic-archive.s3.amazonaws.com/challenges/2018/ISIC2018_Task1_Training_GroundTruth.zip"

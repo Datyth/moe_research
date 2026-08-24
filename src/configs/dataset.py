@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -7,22 +7,16 @@ TaskType = Literal["binary", "multiclass"]
 
 
 @dataclass(frozen=True)
-class DatasetSplitConfig:
-    images_dir: str
-    masks_dir: str
-
-
-@dataclass(frozen=True)
 class DatasetConfig:
     name: str
     root: Path
+    manifest: Path
+    version: str
 
     task: TaskType
     num_classes: int
     in_channels: int = 3
     image_size: tuple[int, int] = (256, 256)
-
-    splits: dict[str, DatasetSplitConfig] = field(default_factory=dict)
 
     image_mean: tuple[float, ...] = (0.485, 0.456, 0.406)
     image_std: tuple[float, ...] = (0.229, 0.224, 0.225)
@@ -34,6 +28,9 @@ class DatasetConfig:
             raise ValueError(
                 "Binary segmentation requires num_classes=1."
             )
+
+        if not self.version:
+            raise ValueError("Dataset version must not be empty.")
 
         if len(self.image_mean) != self.in_channels:
             raise ValueError(
@@ -51,7 +48,7 @@ class DataLoaderConfig:
     num_workers: int = 4
     pin_memory: bool = True
     persistent_workers: bool = True
-    drop_last: bool = False # evaluation should remain False
+    drop_last: bool = False  # evaluation should remain False
 
 
 # dataset_config = DatasetConfig(

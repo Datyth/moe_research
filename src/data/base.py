@@ -12,12 +12,6 @@ class BaseSegmentationDataset(Dataset, ABC):
         split: str,
         transform=None,
     ):
-        if split not in config.splits:
-            raise ValueError(
-                f"Unknown split '{split}'. "
-                f"Available: {tuple(config.splits)}"
-            )
-
         self.config = config
         self.split = split
         self.transform = transform

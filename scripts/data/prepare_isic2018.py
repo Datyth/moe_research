@@ -14,11 +14,14 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from SegMoTE.tools.prepare_isic2018 import convert_split
+from scripts.data.isic2018_conversion import convert_split
 
 
-DEFAULT_RAW_ROOT = PROJECT_ROOT / "SegMoTE" / "raw_data" / "isic2018"
+DEFAULT_RAW_ROOT = PROJECT_ROOT / "dataset" / "raw" / "isic2018"
 DEFAULT_DATA_ROOT = PROJECT_ROOT / "dataset" / "isic2018_task1"
+DEFAULT_MANIFEST_PATH = (
+    PROJECT_ROOT / "manifests" / "isic2018_task1_v1.json"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,6 +32,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
+    parser.add_argument(
+        "--manifest-output",
+        type=Path,
+        default=DEFAULT_MANIFEST_PATH,
+    )
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -182,6 +190,12 @@ def prepare_manifest(
     )
     manifest["training"] = training_records
     manifest["validation"] = validation_records
+    manifest["version"] = "isic2018-task1-v1"
+    manifest["split_metadata"] = {
+        "seed": seed,
+        "validation_ratio": val_ratio,
+    }
+
 
     manifest_path = data_root / "dataset.json"
     temporary_path = manifest_path.with_suffix(".json.tmp")
@@ -206,6 +220,15 @@ def main() -> None:
         copy_images=args.copy_images,
     )
     print(f"Dataset manifest: {args.data_root.expanduser().resolve() / 'dataset.json'}")
+    manifest_output = args.manifest_output.expanduser().resolve()
+    manifest_output.parent.mkdir(parents=True, exist_ok=True)
+    temporary_output = manifest_output.with_suffix(".json.tmp")
+    with temporary_output.open("w", encoding="utf-8") as file:
+        json.dump(manifest, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+    temporary_output.replace(manifest_output)
+
+    print(f"Tracked manifest: {manifest_output}")
     print(f"Training samples: {len(manifest['training'])}")
     print(f"Validation samples: {len(manifest['validation'])}")
     print(f"Test samples: {len(manifest['test'])}")

@@ -2,7 +2,10 @@
 
 from torch import Tensor, nn
 
+from .registry import register_loss
 
+
+@register_loss("dice")
 class DiceLoss(nn.Module):
     """Compute mean soft Dice loss over samples and channels."""
 

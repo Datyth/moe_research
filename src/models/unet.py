@@ -100,6 +100,6 @@ class UNetModel(BaseSegmentationModel):
         super().__init__(in_channels = in_channels, num_classes = num_classes, task = task)
         self.network = UNet(in_channels = in_channels, out_channels = num_classes, base_channels = base_channels)
 
-    def forward(self, images: Tensor, **kwargs):
+    def forward(self, images: Tensor, **kwargs) -> SegmentationOutput:
         logits = self.network(images)
         return SegmentationOutput(logits = logits)

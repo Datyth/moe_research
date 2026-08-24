@@ -35,7 +35,7 @@ class ISIC2018Dataset(BaseSegmentationDataset):
             )
 
         self.root = Path(config.root).expanduser().resolve()
-        manifest_path = self.root / "dataset.json"
+        manifest_path = Path(config.manifest).expanduser().resolve()
 
         if not manifest_path.is_file():
             raise FileNotFoundError(

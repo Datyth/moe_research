@@ -12,6 +12,7 @@ dependencies = [
     "opencv-python",
     "pandas",
     "pillow",
+    "pyyaml",
     "scikit-image",
     "scipy",
     "timm",

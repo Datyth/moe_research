@@ -4,8 +4,10 @@ from torch import Tensor, nn
 
 from .bce import BCELoss
 from .dice import DiceLoss
+from .registry import register_loss
 
 
+@register_loss("bce_dice")
 class BCEDiceLoss(nn.Module):
     """Combine BCE and Dice losses for binary segmentation."""
 

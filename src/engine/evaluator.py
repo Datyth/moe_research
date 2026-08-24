@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
+
+from src.models import SegmentationOutput
 
 
 def compute_binary_dice_iou(
@@ -51,14 +51,6 @@ def compute_binary_dice_iou(
     return dice, iou
 
 
-def _extract_logits(output: Any) -> Tensor:
-    if isinstance(output, Tensor):
-        return output
-    if hasattr(output, "logits"):
-        return output.logits
-    raise TypeError(
-        "Model output must be a Tensor or expose a 'logits' attribute."
-    )
 
 
 def evaluate(
@@ -111,7 +103,13 @@ def evaluate(
                 )
                 batch_size = images.shape[0]
 
-                logits = _extract_logits(model(images))
+                output = model(images)
+                if not isinstance(output, SegmentationOutput):
+                    raise TypeError(
+                        "Model forward must return SegmentationOutput, got "
+                        f"{type(output).__name__}."
+                    )
+                logits = output.logits
                 loss = criterion(logits, targets)
                 if loss.ndim != 0:
                     raise ValueError(

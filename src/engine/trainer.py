@@ -11,8 +11,11 @@ import torch
 from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from .evaluator import evaluate
+from src.models import SegmentationOutput
+
 
 
 HistoryEntry = dict[str, int | float | None]
@@ -24,9 +27,9 @@ class TrainerConfig:
 
     epochs: int = 1
     device: str = "cuda"
-    last_checkpoint_path: Path = Path("checkpoints/unet_last.pt")
-    best_checkpoint_path: Path = Path("checkpoints/unet_best.pt")
-    history_path: Path = Path("results/unet_training_history.json")
+    last_checkpoint_path: Path = Path("runs/default/last.pt")
+    best_checkpoint_path: Path = Path("runs/default/best.pt")
+    history_path: Path = Path("runs/default/history.json")
     prediction_threshold: float = 0.5
     use_amp: bool = True
     log_interval: int = 20
@@ -56,6 +59,7 @@ class Trainer:
         *,
         model: nn.Module,
         criterion: nn.Module,
+        scheduler: Any | None = None,
         optimizer: Optimizer,
         train_loader: DataLoader,
         config: TrainerConfig,
@@ -64,12 +68,15 @@ class Trainer:
     ) -> None:
         self.model = model
         self.criterion = criterion
+        self.scheduler = scheduler
         self.optimizer = optimizer
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
         self.checkpoint_metadata = dict(checkpoint_metadata or {})
         self.device = torch.device(config.device)
+        self.start_epoch = 1
+        self.history: list[HistoryEntry] = []
         self.best_val_dice: float | None = None
 
         if self.device.type == "cuda" and not torch.cuda.is_available():
@@ -93,9 +100,9 @@ class Trainer:
     def train(self) -> list[HistoryEntry]:
         """Run all epochs and return train/validation metric history."""
 
-        history: list[HistoryEntry] = []
+        history = self.history
 
-        for epoch in range(1, self.config.epochs + 1):
+        for epoch in range(self.start_epoch, self.config.epochs + 1):
             train_loss = self._train_epoch(epoch)
             validation_metrics = None
             if self.val_loader is not None:
@@ -127,6 +134,8 @@ class Trainer:
                 ),
             }
             history.append(entry)
+            self._step_scheduler(validation_metrics)
+
 
             val_dice = entry["val_dice"]
             if isinstance(val_dice, float) and (
@@ -148,6 +157,68 @@ class Trainer:
             self._print_epoch_summary(entry)
 
         return history
+    def resume(self, checkpoint_path: Path) -> int:
+        """Restore a versioned last checkpoint and return its completed epoch."""
+
+        path = Path(checkpoint_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+        checkpoint = torch.load(
+            path,
+            map_location=self.device,
+            weights_only=False,
+        )
+        if not isinstance(checkpoint, dict) or checkpoint.get("format_version") != 2:
+            raise ValueError(
+                "Resume requires a version-2 experiment checkpoint. "
+                "Legacy checkpoints remain evaluation-only."
+            )
+
+        self.model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+
+        scheduler_state = checkpoint.get("scheduler_state_dict")
+        if self.scheduler is None and scheduler_state is not None:
+            raise ValueError("Checkpoint contains a scheduler but config uses none.")
+        if self.scheduler is not None and scheduler_state is None:
+            raise ValueError("Checkpoint has no scheduler state required by config.")
+        if self.scheduler is not None:
+            self.scheduler.load_state_dict(scheduler_state)
+
+        completed_epoch = int(checkpoint["epoch"])
+        self.start_epoch = completed_epoch + 1
+        best_val_dice = checkpoint.get("best_val_dice")
+        self.best_val_dice = (
+            None if best_val_dice is None else float(best_val_dice)
+        )
+
+        history_path = Path(self.config.history_path)
+        if not history_path.is_file():
+            raise FileNotFoundError(
+                f"Resume history not found next to checkpoint: {history_path}"
+            )
+        with history_path.open("r", encoding="utf-8") as file:
+            history = json.load(file)
+        if not isinstance(history, list):
+            raise ValueError("Resume history must contain a JSON list.")
+        if history and int(history[-1]["epoch"]) != completed_epoch:
+            raise ValueError(
+                "Resume history and last checkpoint disagree on completed epoch."
+            )
+        self.history = history
+        return completed_epoch
+
+    def _step_scheduler(self, validation_metrics: dict[str, float] | None) -> None:
+        if self.scheduler is None:
+            return
+        if isinstance(self.scheduler, ReduceLROnPlateau):
+            if validation_metrics is None:
+                raise ValueError("reduce_on_plateau requires validation metrics.")
+            self.scheduler.step(validation_metrics["loss"])
+        else:
+            self.scheduler.step()
+
 
     def _train_epoch(self, epoch: int) -> float:
         self.model.train()
@@ -232,13 +303,12 @@ class Trainer:
 
     @staticmethod
     def _extract_logits(output: Any) -> Tensor:
-        if isinstance(output, Tensor):
-            return output
-        if hasattr(output, "logits"):
-            return output.logits
-        raise TypeError(
-            "Model output must be a Tensor or expose a 'logits' attribute."
-        )
+        if not isinstance(output, SegmentationOutput):
+            raise TypeError(
+                "Model forward must return SegmentationOutput, got "
+                f"{type(output).__name__}."
+            )
+        return output.logits
 
     def _save_checkpoint(
         self,
@@ -254,11 +324,15 @@ class Trainer:
         )
 
         checkpoint = {
+            "format_version": 2,
             "epoch": epoch,
             "model_class": type(self.model).__name__,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scaler_state_dict": self.scaler.state_dict(),
+            "scheduler_state_dict": (
+                None if self.scheduler is None else self.scheduler.state_dict()
+            ),
             "train_loss": metrics["train_loss"],
             "val_loss": metrics["val_loss"],
             "val_dice": metrics["val_dice"],

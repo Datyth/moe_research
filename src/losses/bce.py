@@ -4,7 +4,10 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from .registry import register_loss
 
+
+@register_loss("bce")
 class BCELoss(nn.Module):
     """Numerically stable BCE loss operating directly on raw logits."""
 
