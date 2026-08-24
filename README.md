@@ -45,7 +45,8 @@ src/
 └── experiment.py           Experiment builders and lifecycle utilities
 tests/                      CPU unit and integration tests
 docs/                       Detailed usage documentation
-dataset/                    Local data ignored by Git
+/home/teama/projects/project_01/dataset/
+                            External local dataset root
 runs/                       Generated experiment artifacts ignored by Git
 ```
 
@@ -66,7 +67,7 @@ Download and prepare ISIC 2018:
 bash scripts/02_prepare_isic2018_dataset.sh
 ```
 
-Raw archives and extracted source files are stored under `dataset/raw/isic2018`. Converted images and sparse masks are stored under `dataset/isic2018_task1`. These local files are ignored by Git.
+Raw archives and extracted source files are stored under `/home/teama/projects/project_01/dataset/raw/isic2018`. Converted images and sparse masks are stored under `/home/teama/projects/project_01/dataset/isic2018_task1`.
 
 The frozen train, validation, and test split is defined by:
 
@@ -126,7 +127,7 @@ Create optional test visualizations from the best checkpoint:
 ```bash
 python scripts/evaluation/evaluate.py \
   --checkpoint runs/unet_isic2018/<run-id>/best.pt \
-  --data-root dataset/isic2018_task1 \
+  --data-root /home/teama/projects/project_01/dataset/isic2018_task1 \
   --split test \
   --output-dir runs/unet_isic2018/<run-id>/visualization \
   --device cuda \

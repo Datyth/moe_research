@@ -179,7 +179,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("dataset/isic2018_task1"),
+        default=Path("/home/teama/projects/project_01/dataset/isic2018_task1"),
     )
 
     parser.add_argument(
