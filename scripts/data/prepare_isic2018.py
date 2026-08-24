@@ -17,8 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from scripts.data.isic2018_conversion import convert_split
 
 
-DEFAULT_RAW_ROOT = PROJECT_ROOT / "dataset" / "raw" / "isic2018"
-DEFAULT_DATA_ROOT = PROJECT_ROOT / "dataset" / "isic2018_task1"
+DEFAULT_DATASET_ROOT = Path("/home/teama/projects/project_01/dataset")
+DEFAULT_RAW_ROOT = DEFAULT_DATASET_ROOT / "raw" / "isic2018"
+DEFAULT_DATA_ROOT = DEFAULT_DATASET_ROOT / "isic2018_task1"
 DEFAULT_MANIFEST_PATH = (
     PROJECT_ROOT / "manifests" / "isic2018_task1_v1.json"
 )

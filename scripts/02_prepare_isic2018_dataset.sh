@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RAW_DIR="$ROOT_DIR/dataset/raw/isic2018"
-OUT_DIR="$ROOT_DIR/dataset/isic2018_task1"
+RAW_DIR="/home/teama/projects/project_01/dataset/raw/isic2018"
+OUT_DIR="/home/teama/projects/project_01/dataset/isic2018_task1"
 
 download() {
   local url="$1"

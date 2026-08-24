@@ -53,7 +53,7 @@ class DataLoaderConfig:
 
 # dataset_config = DatasetConfig(
 #     name="isic2018",
-#     root=Path("dataset/isic2018_task1"),
+#     root=Path("/home/teama/projects/project_01/dataset/isic2018_task1"),
 #     task="binary",
 #     num_classes=1,
 #     in_channels=3,

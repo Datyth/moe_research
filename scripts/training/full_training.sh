@@ -15,7 +15,7 @@ else
   exit 1
 fi
 
-DATA_ROOT="${DATA_ROOT:-$ROOT_DIR/dataset/isic2018_task1}"
+DATA_ROOT="${DATA_ROOT:-/home/teama/projects/project_01/dataset/isic2018_task1}"
 EPOCHS="${EPOCHS:-50}"
 IMAGE_SIZE="${IMAGE_SIZE:-256}"
 BATCH_SIZE="${BATCH_SIZE:-16}"

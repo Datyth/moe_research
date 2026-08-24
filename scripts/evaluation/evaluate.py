@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=PROJECT_ROOT / "dataset" / "isic2018_task1",
+        default=Path("/home/teama/projects/project_01/dataset/isic2018_task1"),
     )
     parser.add_argument(
         "--checkpoint",

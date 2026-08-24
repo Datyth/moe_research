@@ -28,7 +28,7 @@ seed: 42
 
 dataset:
   name: isic2018
-  root: dataset/isic2018_task1
+  root: /home/teama/projects/project_01/dataset/isic2018_task1
   manifest: manifests/isic2018_task1_v1.json
   version: isic2018-task1-v1
   task: binary
@@ -133,7 +133,7 @@ Model trả raw logits. Không gọi sigmoid trước BCE, Dice hoặc BCE+Dice.
 
 ### Frozen dataset split
 
-Dữ liệu ảnh/mask local nằm trong `dataset/` và không được commit. Split chính thức nằm trong:
+Dữ liệu ảnh/mask local nằm trong `/home/teama/projects/project_01/dataset/` và không được commit. Split chính thức nằm trong:
 
 ```text
 manifests/isic2018_task1_v1.json
@@ -190,7 +190,7 @@ Hoặc cập nhật manifest từ dataset đã có:
 
 ```bash
 python scripts/data/prepare_isic2018.py \
-  --data-root dataset/isic2018_task1 \
+  --data-root /home/teama/projects/project_01/dataset/isic2018_task1 \
   --manifest-output manifests/isic2018_task1_v1.json \
   --val-ratio 0.2 \
   --seed 42
@@ -268,7 +268,7 @@ Final test đã chạy tự động nhưng không tạo ảnh. Khi cần visuali
 ```bash
 python scripts/evaluation/evaluate.py \
   --checkpoint runs/unet_isic2018/<run-id>/best.pt \
-  --data-root dataset/isic2018_task1 \
+  --data-root /home/teama/projects/project_01/dataset/isic2018_task1 \
   --split test \
   --output-dir runs/unet_isic2018/<run-id>/visualization \
   --device cuda \
