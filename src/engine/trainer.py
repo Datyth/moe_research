@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ class TrainerConfig:
     best_checkpoint_path: Path = Path("runs/default/best.pt")
     history_path: Path = Path("runs/default/history.json")
     prediction_threshold: float = 0.5
+    boundary_tolerance: float = 2
     use_amp: bool = True
     log_interval: int = 20
     gradient_clip_norm: float | None = None
@@ -42,6 +44,13 @@ class TrainerConfig:
             raise ValueError("log_interval must be positive.")
         if not 0.0 <= self.prediction_threshold <= 1.0:
             raise ValueError("prediction_threshold must be in [0, 1].")
+        if (
+            isinstance(self.boundary_tolerance, bool)
+            or not isinstance(self.boundary_tolerance, (int, float))
+            or not math.isfinite(float(self.boundary_tolerance))
+            or self.boundary_tolerance < 0
+        ):
+            raise ValueError("boundary_tolerance must be a non-negative number.")
         if (
             self.gradient_clip_norm is not None
             and self.gradient_clip_norm <= 0
@@ -112,6 +121,7 @@ class Trainer:
                     criterion=self.criterion,
                     device=self.device,
                     threshold=self.config.prediction_threshold,
+                    boundary_tolerance=self.config.boundary_tolerance,
                 )
 
             entry: HistoryEntry = {

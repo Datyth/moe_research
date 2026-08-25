@@ -42,5 +42,6 @@ training:
   device: cuda
   amp: true
   prediction_threshold: 0.5
+  boundary_tolerance: 2
   log_interval: 20
   gradient_clip_norm: null
