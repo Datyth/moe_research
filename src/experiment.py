@@ -324,6 +324,7 @@ def execute_experiment(
                 best_checkpoint_path=resolved_run_dir / "best.pt",
                 history_path=resolved_run_dir / "history.json",
                 prediction_threshold=float(training["prediction_threshold"]),
+                boundary_tolerance=float(training["boundary_tolerance"]),
                 use_amp=bool(training["amp"]),
                 log_interval=int(training["log_interval"]),
                 gradient_clip_norm=training["gradient_clip_norm"],
@@ -356,6 +357,7 @@ def execute_experiment(
             criterion=criterion,
             device=training["device"],
             threshold=float(training["prediction_threshold"]),
+            boundary_tolerance=float(training["boundary_tolerance"]),
         )
         test_payload = {
             "checkpoint": "best.pt",
@@ -363,6 +365,9 @@ def execute_experiment(
             "loss": test_metrics["loss"],
             "dice": test_metrics["dice"],
             "iou": test_metrics["iou"],
+            "hd95": test_metrics["hd95"],
+            "assd": test_metrics["assd"],
+            "boundary_f1": test_metrics["boundary_f1"],
         }
         save_json(resolved_run_dir / "test_metrics.json", test_payload)
 
@@ -371,8 +376,11 @@ def execute_experiment(
         metadata["best_epoch"] = int(best_checkpoint["epoch"])
         metadata["best_val_dice"] = best_checkpoint["best_val_dice"]
         save_json(metadata_path, metadata)
-        print(f"Test Dice     : {test_metrics['dice']:.6f}")
-        print(f"Test IoU      : {test_metrics['iou']:.6f}")
+        print(f"Test Dice        : {test_metrics['dice']:.6f}")
+        print(f"Test IoU         : {test_metrics['iou']:.6f}")
+        print(f"Test HD95        : {test_metrics['hd95']:.6f}")
+        print(f"Test ASSD        : {test_metrics['assd']:.6f}")
+        print(f"Test Boundary F1 : {test_metrics['boundary_f1']:.6f}")
         return resolved_run_dir
     except Exception as error:
         metadata["status"] = "failed"

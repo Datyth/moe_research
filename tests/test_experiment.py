@@ -4,6 +4,7 @@ import json
 import statistics
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,11 @@ from PIL import Image
 from scipy import sparse
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 
-from scripts.summarize_experiments import aggregate_runs, collect_runs
+from scripts.summarize_experiments import (
+    aggregate_runs,
+    collect_runs,
+    write_summary_csv,
+)
 from src.configs import resolve_experiment_config
 from src.data import build_dataset
 from src.experiment import (
@@ -110,6 +115,7 @@ class TestExperimentFramework(unittest.TestCase):
             )
             self.assertTrue(Path(config["dataset"]["manifest"]).is_absolute())
             self.assertEqual(config["training"]["prediction_threshold"], 0.5)
+            self.assertEqual(config["training"]["boundary_tolerance"], 2.0)
             self.assertIsInstance(build_loss(config["loss"]), BCEDiceLoss)
 
             model = build_model({
@@ -203,6 +209,17 @@ class TestExperimentFramework(unittest.TestCase):
             metrics = json.loads((run_dir / "test_metrics.json").read_text())
             metadata = json.loads((run_dir / "metadata.json").read_text())
             self.assertEqual(metrics["checkpoint"], "best.pt")
+            self.assertEqual(
+                {
+                    "loss",
+                    "dice",
+                    "iou",
+                    "hd95",
+                    "assd",
+                    "boundary_f1",
+                },
+                set(metrics) - {"checkpoint", "split"},
+            )
             self.assertEqual(metadata["status"], "completed")
             self.assertEqual(metadata["dataset"]["manifest_sha256"], file_sha256(fixture.manifest_path))
 
@@ -225,6 +242,9 @@ class TestExperimentFramework(unittest.TestCase):
                     "loss": 1.0 - dice,
                     "dice": dice,
                     "iou": dice - 0.1,
+                    "hd95": 1.0 - dice,
+                    "assd": 0.5 * (1.0 - dice),
+                    "boundary_f1": dice - 0.05,
                 }))
 
             rows = collect_runs(runs_root, "experiment")
@@ -236,6 +256,40 @@ class TestExperimentFramework(unittest.TestCase):
                 aggregates[0]["dice_std"],
                 statistics.stdev(values),
             )
+            self.assertAlmostEqual(aggregates[0]["boundary_f1_mean"], 0.75)
+            summary_path = runs_root / "summary.csv"
+            write_summary_csv(summary_path, rows, aggregates)
+            header = summary_path.read_text().splitlines()[0].split(",")
+            for metric_name in ("hd95", "assd", "boundary_f1"):
+                self.assertIn(metric_name, header)
+                self.assertIn(f"{metric_name}_mean", header)
+                self.assertIn(f"{metric_name}_std", header)
+
+    def test_summary_skips_legacy_runs_with_a_clear_warning(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            run_dir = Path(temporary_directory) / "experiment" / "legacy"
+            run_dir.mkdir(parents=True)
+            (run_dir / "config.yaml").write_text("seed: 1\n")
+            (run_dir / "metadata.json").write_text(json.dumps({
+                "status": "completed",
+                "experiment_name": "experiment",
+                "config_fingerprint": "legacy",
+                "run_id": "legacy",
+                "seed": 1,
+            }))
+            (run_dir / "test_metrics.json").write_text(json.dumps({
+                "loss": 0.3,
+                "dice": 0.7,
+                "iou": 0.6,
+            }))
+
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                rows = collect_runs(Path(temporary_directory), "experiment")
+
+            self.assertEqual(rows, [])
+            self.assertTrue(captured)
+            self.assertIn("missing metrics", str(captured[0].message))
 
 
 if __name__ == "__main__":

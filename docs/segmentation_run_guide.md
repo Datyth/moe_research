@@ -61,6 +61,7 @@ training:
   device: cuda
   amp: true
   prediction_threshold: 0.5
+  boundary_tolerance: 2
   log_interval: 20
   gradient_clip_norm: null
 ```
@@ -160,7 +161,8 @@ runs/<experiment>/<UTC timestamp>_seed-<seed>/
 - `best.pt`: epoch có validation Dice cao nhất, dùng cho final test.
 - `last.pt`: trạng thái gần nhất để resume.
 - `history.json`: train loss, validation loss, Dice và IoU theo epoch.
-- `test_metrics.json`: loss, Dice và IoU của `best.pt` trên test.
+- `test_metrics.json`: Loss, Dice, IoU, HD95, ASSD và Boundary F1 của
+  `best.pt` trên test.
 - `metadata.json`: seed, Git commit/dirty state, manifest hash, device, timestamps, status và config fingerprint.
 
 Checkpoint version mới chứa model, optimizer, AMP scaler, scheduler, epoch và best validation Dice. Checkpoint legacy vẫn evaluate được nhưng không resume được.
@@ -263,6 +265,27 @@ python scripts/summarize_experiments.py \
 
 Script in bảng từng run và mean ± sample standard deviation. Chỉ các run có cùng experiment name và config fingerprint mới được group; seed và output root không thuộc fingerprint. Một run hiển thị standard deviation là `N/A`.
 
+Summary yêu cầu đủ cả sáu metric. Run cũ thiếu HD95, ASSD hoặc Boundary F1 sẽ
+được bỏ qua với warning rõ ràng; script không gán metric thiếu thành 0.
+
+### Ý nghĩa evaluation metrics
+
+- Dice và IoU đo độ chồng lấp vùng segmentation.
+- HD95 là percentile 95 của tập hợp hai chiều các khoảng cách gần nhất giữa
+  boundary dự đoán và boundary ground truth; đây là robust worst-case boundary
+  distance.
+- ASSD là trung bình có trọng số theo số boundary pixel của cùng hai tập khoảng
+  cách có hướng, thể hiện average boundary distance.
+- Boundary F1 đo precision/recall của boundary. Một boundary pixel được match khi
+  khoảng cách Euclidean gần nhất tới boundary còn lại **nhỏ hơn hoặc bằng**
+  `training.boundary_tolerance`; mặc định là 2 pixel.
+
+Boundary được lấy bằng `mask & ~binary_erosion(mask)`. HD95 và ASSD hiện có đơn vị
+pixel, không phải millimeter, vì pipeline ISIC 2D không cung cấp physical pixel
+spacing. Nếu cả prediction và ground truth rỗng, HD95/ASSD bằng 0 và Boundary F1
+bằng 1. Nếu chỉ một mask rỗng, Boundary F1 bằng 0; HD95 và ASSD nhận finite penalty
+theo đường chéo ảnh `sqrt((H - 1)^2 + (W - 1)^2)`.
+
 Final test đã chạy tự động nhưng không tạo ảnh. Khi cần visualization:
 
 ```bash
@@ -272,6 +295,7 @@ python scripts/evaluation/evaluate.py \
   --split test \
   --output-dir runs/unet_isic2018/<run-id>/visualization \
   --device cuda \
+  --boundary-tolerance 2 \
   --num-visualizations 12
 ```
 

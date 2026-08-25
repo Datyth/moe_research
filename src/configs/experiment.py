@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,9 @@ def _positive_float(value: Any, name: str, *, allow_zero: bool = False) -> float
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a number.")
     result = float(value)
-    if result < 0.0 or (result == 0.0 and not allow_zero):
+    if not math.isfinite(result) or result < 0.0 or (
+        result == 0.0 and not allow_zero
+    ):
         qualifier = "non-negative" if allow_zero else "positive"
         raise ValueError(f"{name} must be {qualifier}.")
     return result
@@ -215,12 +218,18 @@ def resolve_experiment_config(
     if not isinstance(training["amp"], bool):
         raise ValueError("training.amp must be a boolean.")
     training.setdefault("prediction_threshold", 0.5)
+    training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)
     training.setdefault("gradient_clip_norm", None)
     threshold = float(training["prediction_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("training.prediction_threshold must be in [0, 1].")
     training["prediction_threshold"] = threshold
+    training["boundary_tolerance"] = _positive_float(
+        training["boundary_tolerance"],
+        "training.boundary_tolerance",
+        allow_zero=True,
+    )
     training["log_interval"] = _positive_int(
         training["log_interval"], "training.log_interval"
     )

@@ -2,11 +2,31 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
+from src.metrics import (
+    compute_binary_boundary_f1,
+    compute_binary_hd95_assd,
+    compute_binary_surface_distances,
+    compute_binary_surface_metrics,
+    extract_binary_surface,
+)
 from src.models import SegmentationOutput
+
+
+__all__ = [
+    "compute_binary_boundary_f1",
+    "compute_binary_dice_iou",
+    "compute_binary_hd95_assd",
+    "compute_binary_surface_distances",
+    "compute_binary_surface_metrics",
+    "evaluate",
+    "extract_binary_surface",
+]
 
 
 def compute_binary_dice_iou(
@@ -50,9 +70,6 @@ def compute_binary_dice_iou(
     iou = torch.where(union == 0, ones, intersection / union)
     return dice, iou
 
-
-
-
 def evaluate(
     *,
     model: nn.Module,
@@ -60,13 +77,27 @@ def evaluate(
     criterion: nn.Module,
     device: str | torch.device,
     threshold: float = 0.5,
+    boundary_tolerance: float = 2,
 ) -> dict[str, float]:
-    """Evaluate a model and return sample-weighted loss, Dice and IoU."""
+    """Return sample-mean loss and binary region/surface metrics."""
 
     if len(loader) == 0:
         raise ValueError("loader must contain at least one batch.")
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("threshold must be in [0, 1].")
+    if isinstance(boundary_tolerance, bool):
+        raise ValueError("boundary_tolerance must be a non-negative number.")
+    try:
+        resolved_boundary_tolerance = float(boundary_tolerance)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "boundary_tolerance must be a non-negative number."
+        ) from error
+    if (
+        not math.isfinite(resolved_boundary_tolerance)
+        or resolved_boundary_tolerance < 0.0
+    ):
+        raise ValueError("boundary_tolerance must be a non-negative number.")
 
     resolved_device = torch.device(device)
     if resolved_device.type == "cuda" and not torch.cuda.is_available():
@@ -82,6 +113,9 @@ def evaluate(
     total_loss = 0.0
     total_dice = 0.0
     total_iou = 0.0
+    total_hd95 = 0.0
+    total_assd = 0.0
+    total_boundary_f1 = 0.0
     total_samples = 0
 
     try:
@@ -126,10 +160,25 @@ def evaluate(
                 )
                 if not torch.isfinite(dice).all() or not torch.isfinite(iou).all():
                     raise FloatingPointError("Non-finite evaluation metric detected.")
+                hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+                    logits,
+                    targets,
+                    threshold=threshold,
+                    boundary_tolerance=resolved_boundary_tolerance,
+                )
+                if not (
+                    torch.isfinite(hd95).all()
+                    and torch.isfinite(assd).all()
+                    and torch.isfinite(boundary_f1).all()
+                ):
+                    raise FloatingPointError("Non-finite evaluation metric detected.")
 
                 total_loss += loss.item() * batch_size
                 total_dice += dice.sum().item()
                 total_iou += iou.sum().item()
+                total_hd95 += hd95.sum().item()
+                total_assd += assd.sum().item()
+                total_boundary_f1 += boundary_f1.sum().item()
                 total_samples += batch_size
     finally:
         model.train(was_training)
@@ -141,4 +190,7 @@ def evaluate(
         "loss": total_loss / total_samples,
         "dice": total_dice / total_samples,
         "iou": total_iou / total_samples,
+        "hd95": total_hd95 / total_samples,
+        "assd": total_assd / total_samples,
+        "boundary_f1": total_boundary_f1 / total_samples,
     }
