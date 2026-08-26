@@ -60,11 +60,45 @@ training:
   num_workers: 8
   device: cuda
   amp: true
+  amp_dtype: float16
   prediction_threshold: 0.5
   boundary_tolerance: 2
   log_interval: 20
   gradient_clip_norm: null
 ```
+
+`training.amp_dtype` nhận `float16` (mặc định) hoặc `bfloat16`. Đổi sang `bfloat16` khi thấy `FloatingPointError: Non-finite loss detected` giữa chừng training trên GPU hỗ trợ bf16 (Ampere trở lên) — `float16` có dải số mũ hẹp (±65504) nên các kiến trúc có phép nhân không chuẩn hóa ở tầng cuối (ví dụ mask decoder kiểu SAM trong `esam`) dễ tràn số sau vài epoch dù đã bật `gradient_clip_norm`; `bfloat16` có cùng dải số mũ với `float32` nên không gặp lỗi này, đổi lại giảm độ chính xác mantissa. `GradScaler` tự động vô hiệu hoá khi dùng `bfloat16` vì loss-scaling chỉ cần thiết cho `float16`.
+
+#### Chia sẻ hyperparameter chung giữa nhiều config bằng `extends`
+
+Khi nhiều experiment (ví dụ các hàng trong 1 bảng ablation) cần giữ nguyên `dataset`/`loss`/`optimizer`/`scheduler`/`training`, chỉ khác `model`, một file có thể kế thừa file khác thay vì copy toàn bộ:
+
+```yaml
+# configs/isic2018_common.yaml — base, thiếu experiment/model nên không tự chạy được
+seed: 42
+dataset: {...}
+loss: {...}
+optimizer: {...}
+scheduler: {...}
+training: {...}
+```
+
+```yaml
+# configs/isic2018_e1.yaml
+extends: isic2018_common.yaml   # path tương đối so với file chứa nó
+
+experiment:
+  name: isic2018_e1
+  output_root: runs
+
+model:
+  name: esam
+  ...
+```
+
+`load_experiment_config` (dùng bởi `scripts/run_experiment.py`) merge đệ quy: key nào file con khai thì đè lên base ở đúng cấp lồng nhau đó (ví dụ chỉ override `training.epochs` mà không cần chép lại cả `training`), key nào không khai thì giữ nguyên từ base. `extends` có thể chain (base cũng được phép `extends` file khác) nhưng không được vòng lặp. Việc merge diễn ra **trước** validate và trước khi snapshot vào `runs/<experiment>/<run-id>/config.yaml`, nên run đã chạy vẫn giữ nguyên bản config đầy đủ, độc lập với `isic2018_common.yaml` có bị sửa sau này hay không.
+
+Ví dụ thật trong repo: [`configs/isic2018_common.yaml`](../configs/isic2018_common.yaml) là base cho [`isic2018_e0.yaml`](../configs/isic2018_e0.yaml), [`isic2018_e1.yaml`](../configs/isic2018_e1.yaml) và [`isic2018_smoke.yaml`](../configs/isic2018_smoke.yaml) (file này còn override thêm `scheduler`/`training` cho 1 epoch chạy nhanh).
 
 #### Đổi loss qua YAML
 
@@ -312,6 +346,8 @@ python scripts/evaluation/evaluate.py \
 
 Không thêm nhánh model-specific vào trainer hoặc runner. Model có auxiliary outputs đặt chúng trong `aux_logits`; routing/debug information đặt trong `diagnostics`.
 
+Khi port kiến trúc từ một repo ngoài (ví dụ `src/models/esam/`), giữ code gốc trong subpackage `<model>/_vendor/` riêng, không sửa trộn vào wrapper. Mỗi file vendor ghi rõ trong docstring: nguồn gốc (link repo), và từng chỗ khác với upstream kèm lý do (thiếu file, bug, không tương thích với contract của framework này...). Wrapper ở `<model>/__init__.py` chỉ chịu trách nhiệm ánh xạ `in_channels`/`num_classes`/`task` sang tham số của kiến trúc gốc và implement `forward()` theo contract chung — không có logic model-specific nào rò rỉ ra ngoài subpackage vendor.
+
 ### Thêm loss
 
 Loss nhận `logits, targets` và trả scalar Tensor:
@@ -382,6 +418,7 @@ GitHub Actions dùng Python 3.10, PyTorch CPU và `requirements-ci.txt`. CI khô
 ### Lỗi device, output và resume
 
 - `CUDA was requested...`: cài đúng CUDA PyTorch hoặc đổi `training.device: cpu` và `training.amp: false`.
+- `FloatingPointError: Non-finite loss detected`: thử `training.gradient_clip_norm` (ví dụ `1.0`) trước; nếu vẫn tràn số sau vài epoch trên `training.amp: true`, đổi `training.amp_dtype: bfloat16` (xem giải thích ở phần cấu hình mẫu phía trên).
 - Hết VRAM: giảm batch size hoặc image size; không nhầm batch size với image size.
 - `Model forward must return SegmentationOutput`: bọc raw network bằng registered model adapter.
 - `Resume requires a version-2 experiment checkpoint`: checkpoint cũ chỉ dùng evaluation; bắt đầu run lifecycle mới để có resume.

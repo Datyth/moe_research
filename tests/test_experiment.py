@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 from PIL import Image
 from scipy import sparse
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
@@ -18,7 +19,7 @@ from scripts.summarize_experiments import (
     collect_runs,
     write_summary_csv,
 )
-from src.configs import resolve_experiment_config
+from src.configs import load_experiment_config, resolve_experiment_config
 from src.data import build_dataset
 from src.experiment import (
     build_dataset_config,
@@ -102,6 +103,57 @@ class ExperimentFixture:
                 "amp": False,
             },
         }
+
+
+class TestConfigExtends(unittest.TestCase):
+    """Tests for the `extends` deep-merge in load_experiment_config."""
+
+    def test_child_overrides_base_at_every_nesting_level(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            base_config = fixture.raw_config()
+            del base_config["experiment"]  # base intentionally lacks these
+            del base_config["model"]
+            (root / "base.yaml").write_text(yaml.safe_dump(base_config))
+
+            child_config = {
+                "extends": "base.yaml",
+                "experiment": {"name": "child_run", "output_root": str(root / "runs")},
+                "model": {"name": "unet", "base_channels": 4},
+                "training": {"epochs": 5},
+            }
+            child_path = root / "child.yaml"
+            child_path.write_text(yaml.safe_dump(child_config))
+
+            resolved = load_experiment_config(child_path, project_root=root)
+
+            self.assertEqual(resolved["experiment"]["name"], "child_run")
+            self.assertEqual(resolved["model"], {"name": "unet", "base_channels": 4})
+            # Overridden key wins...
+            self.assertEqual(resolved["training"]["epochs"], 5)
+            # ...but sibling keys from the base survive the merge.
+            self.assertEqual(resolved["training"]["batch_size"], 2)
+            self.assertEqual(resolved["training"]["device"], "cpu")
+            self.assertNotIn("extends", resolved)
+
+    def test_missing_extends_target_raises_file_not_found(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            child_path = root / "child.yaml"
+            child_path.write_text(yaml.safe_dump({"extends": "does_not_exist.yaml"}))
+
+            with self.assertRaises(FileNotFoundError):
+                load_experiment_config(child_path, project_root=root)
+
+    def test_circular_extends_raises_clear_error(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "a.yaml").write_text(yaml.safe_dump({"extends": "b.yaml"}))
+            (root / "b.yaml").write_text(yaml.safe_dump({"extends": "a.yaml"}))
+
+            with self.assertRaisesRegex(ValueError, "Circular"):
+                load_experiment_config(root / "a.yaml", project_root=root)
 
 
 class TestExperimentFramework(unittest.TestCase):
