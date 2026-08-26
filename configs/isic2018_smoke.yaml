@@ -1,0 +1,22 @@
+# Fast 1-epoch sanity check before a long run.
+extends: isic2018_common.yaml
+
+experiment:
+  name: isic2018_smoke
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  moe_num_experts: 4
+  moe_top_k_ratio: 0.5
+  freeze_backbone: true
+
+scheduler:
+  name: none
+
+training:
+  epochs: 1
+  num_workers: 4
+  gradient_clip_norm: null
