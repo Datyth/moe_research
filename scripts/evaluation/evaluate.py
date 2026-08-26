@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=Path("/home/teama/projects/project_01/dataset/isic2018_task1"),
+        default=PROJECT_ROOT / "dataset" / "isic2018_task1",
     )
     parser.add_argument(
         "--checkpoint",
@@ -94,11 +94,18 @@ def _checkpoint_configs(
     if not isinstance(metadata, dict):
         metadata = {}
 
-    model_config = DEFAULT_MODEL_CONFIG.copy()
     saved_model_config = metadata.get("model_config")
-    if isinstance(saved_model_config, dict):
-        model_config.update(saved_model_config)
+    model_config = (
+        dict(saved_model_config)
+        if isinstance(saved_model_config, dict)
+        else DEFAULT_MODEL_CONFIG.copy()
+    )
     if args.base_channels is not None:
+        if model_config.get("name") != "unet":
+            raise ValueError(
+                "--base-channels only applies to the unet model, got "
+                f"model.name={model_config.get('name')!r}."
+            )
         model_config["base_channels"] = args.base_channels
 
     data_config = DEFAULT_DATA_CONFIG.copy()
