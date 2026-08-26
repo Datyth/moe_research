@@ -33,7 +33,7 @@ manifests/                  Versioned dataset split manifests
 scripts/
 ├── data/                   Dataset conversion and preparation
 ├── evaluation/             Checkpoint evaluation and visualization
-├── training/               Legacy-compatible training wrappers
+├── training/               Legacy CLI wrappers and per-model convenience scripts
 ├── run_experiment.py       Main experiment entrypoint
 └── summarize_experiments.py
 src/
@@ -47,6 +47,7 @@ tests/                      CPU unit and integration tests
 docs/                       Detailed usage documentation
 /home/teama/projects/project_01/dataset/
                             External local dataset root
+checkpoints/                Pretrained model weights (e.g. SAM) ignored by Git
 runs/                       Generated experiment artifacts ignored by Git
 ```
 
