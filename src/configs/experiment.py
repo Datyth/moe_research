@@ -69,20 +69,69 @@ def _resolve_path(value: Any, project_root: Path, name: str) -> str:
     return str(path.resolve())
 
 
+def _read_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Experiment config not found: {path}")
+    with path.open("r", encoding="utf-8") as file:
+        raw = yaml.safe_load(file)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Experiment config must contain a YAML mapping: {path}")
+    return raw
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge `override` onto `base`, recursing into shared mapping keys."""
+
+    merged = dict(base)
+    for key, value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(base_value, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_raw_config_with_extends(
+    path: Path,
+    *,
+    seen: frozenset[Path] = frozenset(),
+) -> dict[str, Any]:
+    """Resolve a config's optional `extends: <relative-path>` chain."""
+
+    resolved_path = path.resolve()
+    if resolved_path in seen:
+        raise ValueError(
+            "Circular 'extends' chain detected at "
+            f"{resolved_path}."
+        )
+    raw = _read_yaml_mapping(resolved_path)
+    extends = raw.pop("extends", None)
+    if extends is None:
+        return raw
+
+    if not isinstance(extends, str) or not extends:
+        raise ValueError(f"'extends' must be a non-empty path string: {resolved_path}")
+    base_path = Path(extends)
+    if not base_path.is_absolute():
+        base_path = resolved_path.parent / base_path
+    base = _load_raw_config_with_extends(base_path, seen=seen | {resolved_path})
+    return _deep_merge(base, raw)
+
+
 def load_experiment_config(
     path: str | Path,
     *,
     project_root: str | Path,
 ) -> dict[str, Any]:
-    """Read, validate and resolve an experiment YAML file."""
+    """Read, validate and resolve an experiment YAML file.
+
+    Supports an optional `extends: <relative-path>` deep-merge before
+    validation (chains, but not cycles).
+    """
 
     config_path = Path(path).expanduser().resolve()
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Experiment config not found: {config_path}")
-    with config_path.open("r", encoding="utf-8") as file:
-        raw_config = yaml.safe_load(file)
-    if not isinstance(raw_config, dict):
-        raise ValueError("Experiment config must contain a YAML mapping.")
+    raw_config = _load_raw_config_with_extends(config_path)
     return resolve_experiment_config(raw_config, project_root=project_root)
 
 
@@ -217,6 +266,9 @@ def resolve_experiment_config(
         raise ValueError("training.device must be a non-empty string.")
     if not isinstance(training["amp"], bool):
         raise ValueError("training.amp must be a boolean.")
+    training.setdefault("amp_dtype", "float16")
+    if training["amp_dtype"] not in {"float16", "bfloat16"}:
+        raise ValueError("training.amp_dtype must be 'float16' or 'bfloat16'.")
     training.setdefault("prediction_threshold", 0.5)
     training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)

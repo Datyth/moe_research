@@ -34,12 +34,15 @@ class TrainerConfig:
     prediction_threshold: float = 0.5
     boundary_tolerance: float = 2
     use_amp: bool = True
+    amp_dtype: str = "float16"
     log_interval: int = 20
     gradient_clip_norm: float | None = None
 
     def __post_init__(self) -> None:
         if self.epochs <= 0:
             raise ValueError("epochs must be positive.")
+        if self.amp_dtype not in {"float16", "bfloat16"}:
+            raise ValueError("amp_dtype must be 'float16' or 'bfloat16'.")
         if self.log_interval <= 0:
             raise ValueError("log_interval must be positive.")
         if not 0.0 <= self.prediction_threshold <= 1.0:
@@ -98,9 +101,14 @@ class Trainer:
             raise ValueError("val_loader must contain at least one batch.")
 
         self.amp_enabled = config.use_amp and self.device.type == "cuda"
+        self.amp_dtype = (
+            torch.bfloat16 if config.amp_dtype == "bfloat16" else torch.float16
+        )
+        # bfloat16 doesn't need loss scaling; enabled=False makes GradScaler
+        # a documented no-op passthrough, so no separate code path is needed.
         self.scaler = torch.amp.GradScaler(
             device="cuda",
-            enabled=self.amp_enabled,
+            enabled=self.amp_enabled and self.amp_dtype is torch.float16,
         )
 
         self.model.to(self.device)
@@ -244,7 +252,7 @@ class Trainer:
 
             with torch.autocast(
                 device_type=self.device.type,
-                dtype=torch.float16,
+                dtype=self.amp_dtype,
                 enabled=self.amp_enabled,
             ):
                 output = self.model(images)

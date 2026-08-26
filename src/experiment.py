@@ -326,6 +326,7 @@ def execute_experiment(
                 prediction_threshold=float(training["prediction_threshold"]),
                 boundary_tolerance=float(training["boundary_tolerance"]),
                 use_amp=bool(training["amp"]),
+                amp_dtype=str(training["amp_dtype"]),
                 log_interval=int(training["log_interval"]),
                 gradient_clip_norm=training["gradient_clip_norm"],
             ),
