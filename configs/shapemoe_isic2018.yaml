@@ -1,0 +1,62 @@
+experiment:
+  name: shapemoe_isic2018_dw1e4
+  output_root: runs
+
+seed: 42
+
+dataset:
+  name: isic2018
+  root: /home/teama/projects/project_01/dataset/isic2018_task1
+  manifest: manifests/isic2018_task1_v1.json
+  version: isic2018-task1-v1
+  task: binary
+  num_classes: 1
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  mask_threshold: 0.5
+
+# Shared UNet trunk, shape encoder E_S on the bottleneck, sparse router, and
+# num_experts lightweight 1x1 mask heads. latent_dim must match the Phase 0
+# teacher, otherwise the distillation KL has no common space.
+# Expert counts follow the paper's ablations: 4 experts, top-1 routing.
+model:
+  name: shapemoe_unet
+  base_channels: 32
+  latent_dim: 64
+  num_experts: 4
+  top_k: 1
+  shape_encoder_hidden_dim: null
+
+# L = L_seg + balance_weight * L_CV2(pi) + distillation_weight * KL(q_S || q_T)
+loss:
+  name: shapemoe
+  segmentation:
+    name: bce_dice
+    bce_weight: 0.5
+    dice_weight: 0.5
+  balance_weight: 0.01
+  distillation_weight: 0.0001
+
+optimizer:
+  name: adamw
+  lr: 0.0001
+  weight_decay: 0.00001
+
+scheduler:
+  name: cosine
+  eta_min: 0.0
+
+training:
+  epochs: 50
+  batch_size: 16
+  num_workers: 8
+  device: cuda
+  amp: true
+  prediction_threshold: 0.5
+  boundary_tolerance: 2
+  log_interval: 20
+  gradient_clip_norm: 5.0
+  # Set to a Phase 0 run's best.pt, or pass --teacher on the command line.
+  teacher_checkpoint: runs/teacher_vae_isic2018/20260826T174308Z_seed-42/best.pt

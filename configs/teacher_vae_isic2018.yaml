@@ -1,0 +1,62 @@
+experiment:
+  name: teacher_vae_isic2018
+  output_root: runs
+
+seed: 42
+
+dataset:
+  name: isic2018
+  root: /home/teama/projects/project_01/dataset/isic2018_task1
+  manifest: manifests/isic2018_task1_v1.json
+  version: isic2018-task1-v1
+  task: binary
+  num_classes: 1
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  mask_threshold: 0.5
+
+# Phase 0 teacher: M -> E_T -> h_T -> (mu_T, log sigma_T^2) -> z_T -> D_T -> M_hat_T.
+# The image branch of the dataset is loaded but unused; only 'mask' is consumed.
+model:
+  name: mask_vae_teacher
+  latent_dim: 64
+  encoder_channels: [32, 64, 128, 256]
+  decoder_channels: [256, 128, 64, 32, 16, 16, 16]
+  decoder_seed_size: 4
+  logvar_min: -10.0
+  logvar_max: 10.0
+
+# L_VAE = L_rec + beta * L_prior, with L_rec summed over pixels (see
+# docs/teacher_vae_assumptions.md for why the reduction matters to beta).
+loss:
+  name: mask_vae
+  beta: 1.0
+  recon_reduction: sum
+
+optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.00001
+
+scheduler:
+  name: cosine
+  eta_min: 0.0
+
+training:
+  epochs: 100
+  batch_size: 32
+  num_workers: 8
+  device: cuda
+  # AMP is off on purpose. With recon_reduction="sum" at 256x256 the loss is
+  # around 4e4, and the scaled gradients overflow float16: measured 14 of the
+  # first 20 steps skipped, with the loss scale driven down to 4, at which point
+  # scaling protects against nothing. The teacher is small enough that fp32
+  # costs little. Phase 1, whose loss is O(1), keeps AMP on.
+  amp: false
+  prediction_threshold: 0.5
+  # Maximum surface distance (pixels) counted as a Boundary F1 match.
+  boundary_tolerance: 2
+  log_interval: 20
+  gradient_clip_norm: 5.0
