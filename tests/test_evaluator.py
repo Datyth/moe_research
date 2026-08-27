@@ -15,7 +15,13 @@ from scipy import sparse
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from src.engine import compute_binary_dice_iou, evaluate
+from src.engine import (
+    compute_binary_boundary_f1,
+    compute_binary_dice_iou,
+    compute_binary_hd95_assd,
+    compute_binary_surface_metrics,
+    evaluate,
+)
 from src.models import SegmentationOutput, build_model
 from scripts.evaluation.evaluate import _build_boundary_overlay
 
@@ -45,6 +51,33 @@ class TensorModel(nn.Module):
 class OutputModel(nn.Module):
     def forward(self, images: torch.Tensor) -> SegmentationOutput:
         return SegmentationOutput(logits=images[:, :1])
+
+
+class MaskPairDataset(Dataset):
+    def __init__(
+        self,
+        predictions: list[torch.Tensor],
+        targets: list[torch.Tensor],
+    ):
+        self.predictions = predictions
+        self.targets = targets
+
+    def __len__(self) -> int:
+        return len(self.predictions)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        logits = torch.where(
+            self.predictions[index],
+            torch.tensor(20.0),
+            torch.tensor(-20.0),
+        )
+        image = torch.zeros(3, *logits.shape)
+        image[0] = logits
+        return {"image": image, "mask": self.targets[index].unsqueeze(0).float()}
+
+
+def logits_from_masks(masks: torch.Tensor) -> torch.Tensor:
+    return torch.where(masks, torch.tensor(20.0), torch.tensor(-20.0)).float()
 
 
 class TestBinaryEvaluator(unittest.TestCase):
@@ -79,6 +112,147 @@ class TestBinaryEvaluator(unittest.TestCase):
         self.assertTrue(torch.equal(empty_iou, torch.ones_like(empty_iou)))
         self.assertTrue(torch.isfinite(empty_dice).all())
         self.assertTrue(torch.isfinite(empty_iou).all())
+
+    def test_identical_masks_have_perfect_region_and_surface_metrics(self):
+        targets = torch.zeros((1, 1, 9, 9))
+        targets[:, :, 2:7, 2:7] = 1
+        logits = logits_from_masks(targets.bool())
+
+        dice, iou = compute_binary_dice_iou(logits, targets)
+        hd95, assd, boundary_f1 = compute_binary_surface_metrics(logits, targets)
+
+        self.assertEqual(dice.item(), 1.0)
+        self.assertEqual(iou.item(), 1.0)
+        self.assertEqual(hd95.item(), 0.0)
+        self.assertEqual(assd.item(), 0.0)
+        self.assertEqual(boundary_f1.item(), 1.0)
+
+    def test_surface_metrics_handle_both_empty_and_each_one_empty_direction(self):
+        targets = torch.zeros((1, 1, 5, 7))
+        empty_logits = torch.full_like(targets, -20.0)
+        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+            empty_logits,
+            targets,
+        )
+        self.assertEqual((hd95.item(), assd.item(), boundary_f1.item()), (0, 0, 1))
+
+        nonempty = targets.clone()
+        nonempty[:, :, 2, 3] = 1
+        nonempty_logits = logits_from_masks(nonempty.bool())
+        diagonal = np.hypot(4, 6)
+        for logits, ground_truth in (
+            (empty_logits, nonempty),
+            (nonempty_logits, targets),
+        ):
+            hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+                logits,
+                ground_truth,
+            )
+            self.assertAlmostEqual(hd95.item(), diagonal)
+            self.assertAlmostEqual(assd.item(), diagonal)
+            self.assertEqual(boundary_f1.item(), 0.0)
+            self.assertTrue(torch.isfinite(hd95).all())
+            self.assertTrue(torch.isfinite(assd).all())
+
+    def test_shifted_square_is_nonperfect_and_tolerance_is_monotonic(self):
+        target = torch.zeros((1, 1, 12, 12))
+        prediction = torch.zeros_like(target, dtype=torch.bool)
+        target[:, :, 2:7, 2:7] = 1
+        prediction[:, :, 2:7, 5:10] = True
+        logits = logits_from_masks(prediction)
+
+        hd95, assd = compute_binary_hd95_assd(logits, target)
+        strict_f1 = compute_binary_boundary_f1(
+            logits,
+            target,
+            boundary_tolerance=0,
+        )
+        tolerant_f1 = compute_binary_boundary_f1(
+            logits,
+            target,
+            boundary_tolerance=3,
+        )
+
+        self.assertGreater(hd95.item(), 0.0)
+        self.assertGreater(assd.item(), 0.0)
+        self.assertLess(strict_f1.item(), 1.0)
+        self.assertGreaterEqual(tolerant_f1.item(), strict_f1.item())
+
+    def test_single_pixel_translation_has_exact_surface_distance(self):
+        target = torch.zeros((1, 1, 7, 7))
+        prediction = torch.zeros_like(target, dtype=torch.bool)
+        target[:, :, 3, 1] = 1
+        prediction[:, :, 3, 4] = True
+        logits = logits_from_masks(prediction)
+
+        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+            logits,
+            target,
+            boundary_tolerance=2,
+        )
+        self.assertEqual(hd95.item(), 3.0)
+        self.assertEqual(assd.item(), 3.0)
+        self.assertEqual(boundary_f1.item(), 0.0)
+        self.assertEqual(
+            compute_binary_boundary_f1(
+                logits,
+                target,
+                boundary_tolerance=3,
+            ).item(),
+            1.0,
+        )
+
+    def test_evaluator_averages_surface_metrics_per_sample(self):
+        first_target = torch.zeros((8, 8))
+        first_target[2:6, 2:6] = 1
+        second_target = torch.zeros((8, 8))
+        second_target[3, 1] = 1
+        first_prediction = first_target.bool()
+        second_prediction = torch.zeros((8, 8), dtype=torch.bool)
+        second_prediction[3, 4] = True
+        predictions = [first_prediction, second_prediction]
+        targets = [first_target, second_target]
+        loader = DataLoader(
+            MaskPairDataset(predictions, targets),
+            batch_size=2,
+        )
+
+        metrics = evaluate(
+            model=OutputModel(),
+            loader=loader,
+            criterion=nn.MSELoss(),
+            device="cpu",
+            boundary_tolerance=2,
+        )
+        stacked_logits = logits_from_masks(torch.stack(predictions).unsqueeze(1))
+        stacked_targets = torch.stack(targets).unsqueeze(1)
+        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+            stacked_logits,
+            stacked_targets,
+            boundary_tolerance=2,
+        )
+        self.assertAlmostEqual(metrics["hd95"], hd95.mean().item())
+        self.assertAlmostEqual(metrics["assd"], assd.mean().item())
+        self.assertAlmostEqual(
+            metrics["boundary_f1"],
+            boundary_f1.mean().item(),
+        )
+
+    def test_surface_metrics_reject_invalid_inputs(self):
+        logits = torch.zeros((1, 1, 5, 5))
+        targets = torch.zeros_like(logits)
+        with self.assertRaisesRegex(ValueError, "same shape"):
+            compute_binary_surface_metrics(logits, torch.zeros((1, 1, 4, 5)))
+        with self.assertRaisesRegex(ValueError, r"\[B, 1, H, W\]"):
+            compute_binary_surface_metrics(logits[:, 0], targets[:, 0])
+        with self.assertRaisesRegex(ValueError, "threshold"):
+            compute_binary_surface_metrics(logits, targets, threshold=1.1)
+        with self.assertRaisesRegex(ValueError, "boundary_tolerance"):
+            compute_binary_surface_metrics(
+                logits,
+                targets,
+                boundary_tolerance=-1,
+            )
 
     def test_wrong_predictions_remain_bounded(self):
         targets = torch.tensor([[[[0.0, 1.0], [1.0, 0.0]]]])
@@ -199,6 +373,9 @@ class TestBinaryEvaluator(unittest.TestCase):
             self.assertTrue(np.isfinite(metrics["loss"]))
             self.assertTrue(np.isfinite(metrics["dice"]))
             self.assertTrue(np.isfinite(metrics["iou"]))
+            self.assertTrue(np.isfinite(metrics["hd95"]))
+            self.assertTrue(np.isfinite(metrics["assd"]))
+            self.assertTrue(np.isfinite(metrics["boundary_f1"]))
             self.assertTrue(visualization_path.is_file())
             with Image.open(visualization_path) as visualization:
                 self.assertGreater(visualization.width, visualization.height * 2)

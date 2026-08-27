@@ -59,8 +59,15 @@ class UNet(nn.Module):
         # Conv 1x1 để chuyển số kênh về đúng num_classes
         self.out_conv = nn.Conv2d(base_channels, out_channels, kernel_size=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 1. Encoder 
+    def forward_features(self, x: torch.Tensor) -> tuple[Tensor, Tensor]:
+        """Return the bottleneck feature and the full-resolution decoder feature.
+
+        The decoder feature is what ``out_conv`` consumes, so it plays the role of
+        the refined image feature F that SAM's hyper-network multiplies against.
+        Mixture-of-experts heads attach here.
+        """
+
+        # 1. Encoder
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
@@ -89,9 +96,13 @@ class UNet(nn.Module):
         x = self.up4(x)
         x = torch.cat([x, x1], dim=1)
         x = self.conv4(x)
-        
+
+        return x5, x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 4. Return logits
-        logits = self.out_conv(x)
+        _, features = self.forward_features(x)
+        logits = self.out_conv(features)
         return logits
 
 @register_model("unet")

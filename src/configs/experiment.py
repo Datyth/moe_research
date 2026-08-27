@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,9 @@ def _positive_float(value: Any, name: str, *, allow_zero: bool = False) -> float
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a number.")
     result = float(value)
-    if result < 0.0 or (result == 0.0 and not allow_zero):
+    if not math.isfinite(result) or result < 0.0 or (
+        result == 0.0 and not allow_zero
+    ):
         qualifier = "non-negative" if allow_zero else "positive"
         raise ValueError(f"{name} must be {qualifier}.")
     return result
@@ -140,9 +143,45 @@ def resolve_experiment_config(
         raise ValueError("dataset.image_size must contain two positive integers.")
     dataset["image_size"] = [int(value) for value in image_size]
     dataset["root"] = _resolve_path(dataset["root"], root, "dataset.root")
-    dataset["manifest"] = _resolve_path(
-        dataset["manifest"], root, "dataset.manifest"
-    )
+    manifest = dataset["manifest"]
+    if isinstance(manifest, dict):
+        split_keys = ("train", "val", "test")
+        missing = [split for split in split_keys if split not in manifest]
+        extra = sorted(set(manifest) - set(split_keys))
+        if missing or extra:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"unknown {', '.join(extra)}")
+            raise ValueError(
+                "dataset.manifest split mapping is invalid: " + "; ".join(details)
+            )
+        resolved_manifest: dict[str, object] = {}
+        for split in split_keys:
+            source = manifest[split]
+            field = f"dataset.manifest.{split}"
+            if isinstance(source, (str, Path)):
+                resolved_manifest[split] = _resolve_path(source, root, field)
+                continue
+            if not isinstance(source, dict):
+                raise ValueError(f"{field} must be a path or mapping.")
+            source_keys = [
+                key for key in ("manifest", "directory") if key in source
+            ]
+            if len(source_keys) != 1 or len(source) != 1:
+                raise ValueError(
+                    f"{field} needs exactly one of 'manifest' or 'directory'."
+                )
+            source_key = source_keys[0]
+            resolved_manifest[split] = {
+                source_key: _resolve_path(
+                    source[source_key], root, f"{field}.{source_key}"
+                )
+            }
+        dataset["manifest"] = resolved_manifest
+    else:
+        dataset["manifest"] = _resolve_path(manifest, root, "dataset.manifest")
     if not isinstance(dataset["version"], str) or not dataset["version"]:
         raise ValueError("dataset.version must be a non-empty string.")
     dataset.setdefault("image_mean", [0.485, 0.456, 0.406])
@@ -215,12 +254,18 @@ def resolve_experiment_config(
     if not isinstance(training["amp"], bool):
         raise ValueError("training.amp must be a boolean.")
     training.setdefault("prediction_threshold", 0.5)
+    training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)
     training.setdefault("gradient_clip_norm", None)
     threshold = float(training["prediction_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("training.prediction_threshold must be in [0, 1].")
     training["prediction_threshold"] = threshold
+    training["boundary_tolerance"] = _positive_float(
+        training["boundary_tolerance"],
+        "training.boundary_tolerance",
+        allow_zero=True,
+    )
     training["log_interval"] = _positive_int(
         training["log_interval"], "training.log_interval"
     )
