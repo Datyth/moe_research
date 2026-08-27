@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import statistics
+import warnings
 
 import yaml
 from collections import defaultdict
@@ -14,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-METRIC_NAMES = ("loss", "dice", "iou")
+METRIC_NAMES = ("loss", "dice", "iou", "hd95", "assd", "boundary_f1")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -43,14 +45,35 @@ def collect_runs(runs_root: Path, experiment: str | None = None) -> list[dict[st
         metrics = _read_json(metrics_path)
         if metadata.get("status") != "completed":
             continue
+        missing_metrics = [
+            metric_name
+            for metric_name in METRIC_NAMES
+            if metric_name not in metrics
+        ]
+        if missing_metrics:
+            warnings.warn(
+                f"Skipping {run_dir}: missing metrics "
+                f"{', '.join(missing_metrics)}.",
+                stacklevel=2,
+            )
+            continue
+        metric_values = {
+            metric_name: float(metrics[metric_name])
+            for metric_name in METRIC_NAMES
+        }
+        if not all(math.isfinite(value) for value in metric_values.values()):
+            warnings.warn(
+                f"Skipping {run_dir}: metrics contain NaN or infinity.",
+                stacklevel=2,
+            )
+            continue
         row = {
             "experiment": str(metadata["experiment_name"]),
             "config_fingerprint": str(metadata["config_fingerprint"]),
             "run_id": str(metadata["run_id"]),
             "seed": int(metadata["seed"]),
         }
-        for metric_name in METRIC_NAMES:
-            row[metric_name] = float(metrics[metric_name])
+        row.update(metric_values)
         rows.append(row)
     return rows
 
@@ -91,15 +114,12 @@ def write_summary_csv(
         "seed",
         "n",
         "seeds",
-        "loss",
-        "dice",
-        "iou",
-        "loss_mean",
-        "loss_std",
-        "dice_mean",
-        "dice_std",
-        "iou_mean",
-        "iou_std",
+        *METRIC_NAMES,
+        *(
+            field
+            for metric in METRIC_NAMES
+            for field in (f"{metric}_mean", f"{metric}_std")
+        ),
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
@@ -131,20 +151,27 @@ def main() -> None:
     write_summary_csv(args.output.expanduser().resolve(), rows, aggregates)
 
     print("Per-run test metrics")
-    print("experiment\trun_id\tseed\tloss\tdice\tiou")
+    print("experiment\trun_id\tseed\t" + "\t".join(METRIC_NAMES))
     for row in rows:
         print(
             f"{row['experiment']}\t{row['run_id']}\t{row['seed']}\t"
-            f"{row['loss']:.6f}\t{row['dice']:.6f}\t{row['iou']:.6f}"
+            + "\t".join(f"{float(row[name]):.6f}" for name in METRIC_NAMES)
         )
     print("\nAggregate by experiment and config fingerprint")
-    print("experiment\tn\tloss mean ± std\tdice mean ± std\tiou mean ± std")
+    print(
+        "experiment\tn\t"
+        + "\t".join(f"{name} mean ± std" for name in METRIC_NAMES)
+    )
     for aggregate in aggregates:
         print(
             f"{aggregate['experiment']}\t{aggregate['n']}\t"
-            f"{_mean_std(aggregate['loss_mean'], aggregate['loss_std'])}\t"
-            f"{_mean_std(aggregate['dice_mean'], aggregate['dice_std'])}\t"
-            f"{_mean_std(aggregate['iou_mean'], aggregate['iou_std'])}"
+            + "\t".join(
+                _mean_std(
+                    aggregate[f"{name}_mean"],
+                    aggregate[f"{name}_std"],
+                )
+                for name in METRIC_NAMES
+            )
         )
     print(f"\nSummary CSV: {args.output.expanduser().resolve()}")
 

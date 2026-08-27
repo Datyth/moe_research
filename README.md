@@ -45,7 +45,8 @@ src/
 └── experiment.py           Experiment builders and lifecycle utilities
 tests/                      CPU unit and integration tests
 docs/                       Detailed usage documentation
-dataset/                    Local data ignored by Git
+/home/teama/projects/project_01/dataset/
+                            External local dataset root
 runs/                       Generated experiment artifacts ignored by Git
 ```
 
@@ -66,7 +67,7 @@ Download and prepare ISIC 2018:
 bash scripts/02_prepare_isic2018_dataset.sh
 ```
 
-Raw archives and extracted source files are stored under `dataset/raw/isic2018`. Converted images and sparse masks are stored under `dataset/isic2018_task1`. These local files are ignored by Git.
+Raw archives and extracted source files are stored under `/home/teama/projects/project_01/dataset/raw/isic2018`. Converted images and sparse masks are stored under `/home/teama/projects/project_01/dataset/isic2018_task1`.
 
 The frozen train, validation, and test split is defined by:
 
@@ -112,6 +113,33 @@ loss:
 
 Available loss names are `bce`, `dice`, and `bce_dice`.
 
+The ShapeMoE pipeline runs in two phases. Both write a run folder with the same
+file names as an ordinary experiment, but their runs are **not** picked up by
+`summarize_experiments.py`: that script filters on a `status` field and requires
+the full surface-metric set, neither of which these phases produce yet.
+
+Phase 0 pretrains the mask-VAE shape teacher on ground-truth masks only:
+
+```bash
+python scripts/training/pretrain_teacher_vae.py \
+  --config configs/teacher_vae_isic2018.yaml
+```
+
+Phase 1 trains the shape-routed segmenter under that frozen teacher, which
+supplies the shape posterior the student must reproduce from the image alone:
+
+```bash
+python scripts/training/train_shapemoe.py \
+  --config configs/shapemoe_isic2018.yaml \
+  --teacher runs/teacher_vae_isic2018/<run-id>/best.pt
+```
+
+`model.latent_dim` in the Phase 1 config must match the teacher's, and omitting
+`--teacher` disables distillation, which leaves the shape encoder untrained.
+Which parts follow the ShapeMoE paper, which are substitutions, and every choice
+the specification left open are recorded in
+[ShapeMoE implementation assumptions](docs/shapemoe_assumptions.md).
+
 Summarize completed runs across multiple seeds:
 
 ```bash
@@ -126,7 +154,7 @@ Create optional test visualizations from the best checkpoint:
 ```bash
 python scripts/evaluation/evaluate.py \
   --checkpoint runs/unet_isic2018/<run-id>/best.pt \
-  --data-root dataset/isic2018_task1 \
+  --data-root /home/teama/projects/project_01/dataset/isic2018_task1 \
   --split test \
   --output-dir runs/unet_isic2018/<run-id>/visualization \
   --device cuda \

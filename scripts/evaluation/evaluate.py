@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=PROJECT_ROOT / "dataset" / "isic2018_task1",
+        default=Path("/home/teama/projects/project_01/dataset/isic2018_task1"),
     )
     parser.add_argument(
         "--checkpoint",
@@ -79,6 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--boundary-tolerance", type=float, default=None)
     parser.add_argument("--image-size", type=int, default=None)
     parser.add_argument("--base-channels", type=int, default=None)
     parser.add_argument("--num-visualizations", type=int, default=12)
@@ -88,7 +89,7 @@ def parse_args() -> argparse.Namespace:
 def _checkpoint_configs(
     checkpoint: dict[str, Any],
     args: argparse.Namespace,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], float]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], float, float]:
     metadata = checkpoint.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -123,7 +124,28 @@ def _checkpoint_configs(
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("threshold must be in [0, 1].")
 
-    return model_config, data_config, loss_config, threshold
+    saved_boundary_tolerance = None
+    if isinstance(saved_trainer_config, dict):
+        saved_boundary_tolerance = saved_trainer_config.get("boundary_tolerance")
+    boundary_tolerance = (
+        args.boundary_tolerance
+        if args.boundary_tolerance is not None
+        else float(
+            saved_boundary_tolerance
+            if saved_boundary_tolerance is not None
+            else 2
+        )
+    )
+    if not np.isfinite(boundary_tolerance) or boundary_tolerance < 0:
+        raise ValueError("boundary_tolerance must be a non-negative number.")
+
+    return (
+        model_config,
+        data_config,
+        loss_config,
+        threshold,
+        boundary_tolerance,
+    )
 
 
 def _build_dataset_config(
@@ -296,10 +318,13 @@ def main() -> None:
     if not isinstance(checkpoint, dict) or "model_state_dict" not in checkpoint:
         raise ValueError(f"Invalid checkpoint: {checkpoint_path}")
 
-    model_config, data_config, loss_config, threshold = _checkpoint_configs(
-        checkpoint,
-        args,
-    )
+    (
+        model_config,
+        data_config,
+        loss_config,
+        threshold,
+        boundary_tolerance,
+    ) = _checkpoint_configs(checkpoint, args)
     dataset_config = _build_dataset_config(
         data_root=args.data_root.expanduser().resolve(),
         data_config=data_config,
@@ -327,6 +352,7 @@ def main() -> None:
         criterion=criterion,
         device=device,
         threshold=threshold,
+        boundary_tolerance=boundary_tolerance,
     )
     output_dir = args.output_dir.expanduser().resolve()
     metrics_payload = {
@@ -335,6 +361,9 @@ def main() -> None:
         "loss": metrics["loss"],
         "dice": metrics["dice"],
         "iou": metrics["iou"],
+        "hd95": metrics["hd95"],
+        "assd": metrics["assd"],
+        "boundary_f1": metrics["boundary_f1"],
     }
     _save_json(output_dir / "metrics.json", metrics_payload)
 
@@ -350,9 +379,12 @@ def main() -> None:
     )
 
     split_label = "Validation" if args.split == "val" else "Test"
-    print(f"{split_label} Loss : {metrics['loss']:.6f}")
-    print(f"{split_label} Dice : {metrics['dice']:.6f}")
-    print(f"{split_label} IoU  : {metrics['iou']:.6f}")
+    print(f"{split_label} Loss        : {metrics['loss']:.6f}")
+    print(f"{split_label} Dice        : {metrics['dice']:.6f}")
+    print(f"{split_label} IoU         : {metrics['iou']:.6f}")
+    print(f"{split_label} HD95        : {metrics['hd95']:.6f}")
+    print(f"{split_label} ASSD        : {metrics['assd']:.6f}")
+    print(f"{split_label} Boundary F1 : {metrics['boundary_f1']:.6f}")
     print(f"Metrics   : {output_dir / 'metrics.json'}")
 
 
