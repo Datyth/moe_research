@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from src.configs import DatasetConfig
 from src.data import build_dataset
 from src.engine import Trainer, TrainerConfig, evaluate
+from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
 
@@ -164,6 +165,7 @@ def build_optimizer(
 def build_scheduler(
     config: dict[str, Any],
     optimizer: torch.optim.Optimizer,
+    total_steps: int | None = None,
 ):
     scheduler_config = config["scheduler"]
     scheduler_name = scheduler_config["name"]
@@ -174,6 +176,18 @@ def build_scheduler(
             optimizer,
             T_max=int(config["training"]["epochs"]),
             eta_min=float(scheduler_config["eta_min"]),
+        )
+    if scheduler_name == "warmup_poly":
+        if total_steps is None:
+            raise ValueError(
+                "scheduler.name='warmup_poly' requires total_steps "
+                "(epochs * steps per epoch)."
+            )
+        return WarmupPolyLR(
+            optimizer,
+            total_steps=int(total_steps),
+            warmup_steps=int(scheduler_config["warmup_steps"]),
+            power=float(scheduler_config["power"]),
         )
     if scheduler_name == "reduce_on_plateau":
         return ReduceLROnPlateau(
@@ -307,7 +321,11 @@ def execute_experiment(
         model = build_model(model_config)
         criterion = build_loss(config["loss"])
         optimizer = build_optimizer(config, model)
-        scheduler = build_scheduler(config, optimizer)
+        scheduler = build_scheduler(
+            config,
+            optimizer,
+            total_steps=int(config["training"]["epochs"]) * len(train_loader),
+        )
         training = config["training"]
 
         trainer = Trainer(

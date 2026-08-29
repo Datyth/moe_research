@@ -7,6 +7,7 @@ from .evaluator import (
     evaluate,
     extract_binary_surface,
 )
+from .schedulers import PER_ITERATION_SCHEDULERS, WarmupPolyLR, is_per_iteration_scheduler
 from .trainer import Trainer, TrainerConfig
 
 __all__ = [
@@ -17,6 +18,9 @@ __all__ = [
     "compute_binary_surface_metrics",
     "extract_binary_surface",
     "evaluate",
+    "WarmupPolyLR",
+    "PER_ITERATION_SCHEDULERS",
+    "is_per_iteration_scheduler",
     "Trainer",
     "TrainerConfig",
 ]

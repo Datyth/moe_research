@@ -14,7 +14,7 @@ Mỗi experiment được mô tả bởi một YAML, ví dụ [`configs/unet.yam
 - `model`: model registry name cùng tham số riêng của kiến trúc.
 - `loss`: loss registry name cùng tham số constructor.
 - `optimizer`: hiện hỗ trợ AdamW.
-- `scheduler`: `none`, `cosine` hoặc `reduce_on_plateau`.
+- `scheduler`: `none`, `cosine`, `reduce_on_plateau` hoặc `warmup_poly`.
 - `training`: epochs, batch size, workers, device, AMP và threshold.
 
 Cấu hình mẫu:
@@ -390,6 +390,7 @@ Scheduler v1 cố ý chỉ có:
 - `none`.
 - `cosine`: `T_max` tự lấy tổng epochs, config nhận `eta_min`.
 - `reduce_on_plateau`: luôn monitor validation loss với mode `min`, config nhận `factor`, `patience`, `min_lr`.
+- `warmup_poly`: scheduler theo iteration (công thức của MoE-SAM/E-SAM), config nhận `warmup_steps` (mặc định 250) và `power` (mặc định 0.9). Warmup tuyến tính theo số bước optimizer, sau đó suy giảm đa thức `(1 - progress)**power` đến 0 ở cuối huấn luyện; `Trainer` tự step mỗi optimizer step thay vì mỗi epoch.
 
 Optimizer v1 chỉ hỗ trợ AdamW. Chỉ mở rộng builder khi experiment thực tế cần optimizer mới; chưa cần registry hoặc callback system.
 
