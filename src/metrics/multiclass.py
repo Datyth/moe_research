@@ -80,8 +80,8 @@ def compute_multiclass_surface_metrics(
     *,
     ignore_background: bool = True,
     boundary_tolerance: float = 2,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Compute per-sample, class-mean HD95, ASSD and Boundary F1.
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Compute per-sample, class-mean HD, HD95, ASSD and Boundary F1.
 
     Generalizes `compute_binary_surface_metrics` to multiclass masks: each
     class is scored as its own binary problem (that class vs. everything
@@ -101,13 +101,13 @@ def compute_multiclass_surface_metrics(
     target_masks = targets.detach().cpu().numpy()
 
     batch_size = logits.shape[0]
-    values = torch.empty((batch_size, 3), dtype=torch.float64)
+    values = torch.empty((batch_size, 4), dtype=torch.float64)
 
     for sample_index in range(batch_size):
         prediction_sample = predictions[sample_index]
         target_sample = target_masks[sample_index]
 
-        class_values: list[tuple[float, float, float]] = []
+        class_values: list[tuple[float, float, float, float]] = []
         for class_id in range(first_class, num_classes):
             prediction_mask = prediction_sample == class_id
             target_mask = target_sample == class_id
@@ -122,10 +122,12 @@ def compute_multiclass_surface_metrics(
             )
 
         if not class_values:
-            values[sample_index] = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float64)
+            values[sample_index] = torch.tensor(
+                [0.0, 0.0, 0.0, 1.0], dtype=torch.float64
+            )
         else:
             values[sample_index] = torch.tensor(
                 class_values, dtype=torch.float64
             ).mean(dim=0)
 
-    return values[:, 0], values[:, 1], values[:, 2]
+    return values[:, 0], values[:, 1], values[:, 2], values[:, 3]

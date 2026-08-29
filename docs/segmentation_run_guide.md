@@ -14,7 +14,7 @@ Mỗi experiment được mô tả bởi một YAML, ví dụ [`configs/unet.yam
 - `model`: model registry name cùng tham số riêng của kiến trúc.
 - `loss`: loss registry name cùng tham số constructor.
 - `optimizer`: hiện hỗ trợ AdamW.
-- `scheduler`: `none`, `cosine` hoặc `reduce_on_plateau`.
+- `scheduler`: `none`, `cosine`, `reduce_on_plateau` hoặc `warmup_poly`.
 - `training`: epochs, batch size, workers, device, AMP và threshold.
 
 Cấu hình mẫu:
@@ -206,7 +206,7 @@ runs/<experiment>/<UTC timestamp>_seed-<seed>/
 - `best.pt`: epoch có validation Dice cao nhất, dùng cho final test.
 - `last.pt`: trạng thái gần nhất để resume.
 - `history.json`: train loss, validation loss, Dice và IoU theo epoch.
-- `test_metrics.json`: Loss, Dice, IoU, HD95, ASSD và Boundary F1 của
+- `test_metrics.json`: Loss, Dice, IoU, HD, HD95, ASSD và Boundary F1 của
   `best.pt` trên test.
 - `metadata.json`: seed, Git commit/dirty state, manifest hash, device, timestamps, status và config fingerprint.
 
@@ -310,26 +310,29 @@ python scripts/summarize_experiments.py \
 
 Script in bảng từng run và mean ± sample standard deviation. Chỉ các run có cùng experiment name và config fingerprint mới được group; seed và output root không thuộc fingerprint. Một run hiển thị standard deviation là `N/A`.
 
-Summary yêu cầu đủ cả sáu metric. Run cũ thiếu HD95, ASSD hoặc Boundary F1 sẽ
+Summary yêu cầu đủ cả bảy metric. Run cũ thiếu HD, HD95, ASSD hoặc Boundary F1 sẽ
 được bỏ qua với warning rõ ràng; script không gán metric thiếu thành 0.
 
 ### Ý nghĩa evaluation metrics
 
-- Dice và IoU đo độ chồng lấp vùng segmentation.
-- HD95 là percentile 95 của tập hợp hai chiều các khoảng cách gần nhất giữa
-  boundary dự đoán và boundary ground truth; đây là robust worst-case boundary
-  distance.
+- Dice và IoU đo độ chồng lấp vùng segmentation. Dice trùng với Dice Similarity
+  Coefficient (DSC) dùng trong nhiều paper.
+- HD là Hausdorff distance cổ điển: khoảng cách lớn nhất trong tập hợp hai chiều
+  các khoảng cách gần nhất giữa boundary dự đoán và boundary ground truth. HD
+  nhạy với outlier (một pixel nhiễu có thể làm HD tăng vọt).
+- HD95 là percentile 95 của cùng tập hợp khoảng cách đó; đây là robust worst-case
+  boundary distance, thường được ưu tiên hơn HD khi báo cáo.
 - ASSD là trung bình có trọng số theo số boundary pixel của cùng hai tập khoảng
   cách có hướng, thể hiện average boundary distance.
 - Boundary F1 đo precision/recall của boundary. Một boundary pixel được match khi
   khoảng cách Euclidean gần nhất tới boundary còn lại **nhỏ hơn hoặc bằng**
   `training.boundary_tolerance`; mặc định là 2 pixel.
 
-Boundary được lấy bằng `mask & ~binary_erosion(mask)`. HD95 và ASSD hiện có đơn vị
-pixel, không phải millimeter, vì pipeline ISIC 2D không cung cấp physical pixel
-spacing. Nếu cả prediction và ground truth rỗng, HD95/ASSD bằng 0 và Boundary F1
-bằng 1. Nếu chỉ một mask rỗng, Boundary F1 bằng 0; HD95 và ASSD nhận finite penalty
-theo đường chéo ảnh `sqrt((H - 1)^2 + (W - 1)^2)`.
+Boundary được lấy bằng `mask & ~binary_erosion(mask)`. HD, HD95 và ASSD hiện có
+don vị pixel, không phải millimeter, vì pipeline ISIC 2D không cung cấp physical
+pixel spacing. Nếu cả prediction và ground truth rỗng, HD/HD95/ASSD bằng 0 và
+Boundary F1 bằng 1. Nếu chỉ một mask rỗng, Boundary F1 bằng 0; HD, HD95 và ASSD
+nhận finite penalty theo đường chéo ảnh `sqrt((H - 1)^2 + (W - 1)^2)`.
 
 Final test đã chạy tự động nhưng không tạo ảnh. Khi cần visualization:
 
@@ -403,6 +406,7 @@ Scheduler v1 cố ý chỉ có:
 - `none`.
 - `cosine`: `T_max` tự lấy tổng epochs, config nhận `eta_min`.
 - `reduce_on_plateau`: luôn monitor validation loss với mode `min`, config nhận `factor`, `patience`, `min_lr`.
+- `warmup_poly`: scheduler theo iteration (công thức của MoE-SAM/E-SAM), config nhận `warmup_steps` (mặc định 250) và `power` (mặc định 0.9). Warmup tuyến tính theo số bước optimizer, sau đó suy giảm đa thức `(1 - progress)**power` đến 0 ở cuối huấn luyện; `Trainer` tự step mỗi optimizer step thay vì mỗi epoch.
 
 Optimizer v1 chỉ hỗ trợ AdamW. Chỉ mở rộng builder khi experiment thực tế cần optimizer mới; chưa cần registry hoặc callback system.
 

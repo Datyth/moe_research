@@ -1,4 +1,5 @@
-# E0: SAM + Adapter, no MoE (same as isic2018_e1.yaml but use_moe: false).
+# E0: Baseline — SAM + Adapter only (no MoE-FEB, no LPEG).
+# Ablation row of paper Table 2 ("neither" column).
 extends: isic2018_common.yaml
 
 experiment:
@@ -10,4 +11,11 @@ model:
   image_size: 256
   checkpoint: checkpoints/sam_vit_b_01ec64.pth
   use_moe: false
+  use_lpeg: false
   freeze_backbone: true
+
+scheduler:
+  # Paper-released recipe: 250-iteration linear warmup + polynomial decay 0.9.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

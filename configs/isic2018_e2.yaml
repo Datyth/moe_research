@@ -1,19 +1,17 @@
-# E1: MoE only — SAM + Adapter + MoE-FEB (no LPEG).
-# Ablation row of paper Table 2 (MoE-FEB column, LPEG off).
+# E2: LPEG only — SAM + Adapter + LPEG (no MoE-FEB).
+# Ablation row of paper Table 2 (LPEG column, MoE-FEB off).
 extends: isic2018_common.yaml
 
 experiment:
-  name: isic2018_e1
+  name: isic2018_e2
   output_root: runs
 
 model:
   name: esam
   image_size: 256
   checkpoint: checkpoints/sam_vit_b_01ec64.pth
-  use_moe: true
-  use_lpeg: false
-  moe_num_experts: 4
-  moe_top_k_ratio: 0.5
+  use_moe: false
+  use_lpeg: true
   freeze_backbone: true
 
 scheduler:

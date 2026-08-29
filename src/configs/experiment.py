@@ -231,24 +231,26 @@ def resolve_experiment_config(
     scheduler = config["scheduler"]
     _require_keys(scheduler, "scheduler", ("name",))
     scheduler_name = scheduler["name"]
-    if scheduler_name not in {"none", "cosine", "cosine_warmup", "reduce_on_plateau"}:
+    if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
         raise ValueError(
-            "scheduler.name must be one of: none, cosine, cosine_warmup, reduce_on_plateau."
+            "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
+            "warmup_poly."
         )
     if scheduler_name == "cosine":
         scheduler.setdefault("eta_min", 0.0)
         scheduler["eta_min"] = _positive_float(
             scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
         )
-    elif scheduler_name == "cosine_warmup":
-        scheduler.setdefault("eta_min", 0.0)
-        scheduler.setdefault("warmup_epochs", 5)
-        scheduler["eta_min"] = _positive_float(
-            scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
+    elif scheduler_name == "warmup_poly":
+        scheduler.setdefault("warmup_steps", 250)
+        scheduler.setdefault("power", 0.9)
+        scheduler["warmup_steps"] = _positive_int(
+            scheduler["warmup_steps"], "scheduler.warmup_steps", allow_zero=True
         )
-        scheduler["warmup_epochs"] = _positive_int(
-            scheduler["warmup_epochs"], "scheduler.warmup_epochs", allow_zero=True
-        )
+        power = _positive_float(scheduler["power"], "scheduler.power")
+        if power > 1.0:
+            raise ValueError("scheduler.power must be in (0, 1].")
+        scheduler["power"] = power
     elif scheduler_name == "reduce_on_plateau":
         scheduler.setdefault("factor", 0.1)
         scheduler.setdefault("patience", 5)
@@ -267,11 +269,6 @@ def resolve_experiment_config(
     training = config["training"]
     _require_keys(training, "training", ("epochs", "batch_size", "num_workers", "device", "amp"))
     training["epochs"] = _positive_int(training["epochs"], "training.epochs")
-    if (
-        scheduler_name == "cosine_warmup"
-        and scheduler["warmup_epochs"] >= training["epochs"]
-    ):
-        raise ValueError("scheduler.warmup_epochs must be less than training.epochs.")
     training["batch_size"] = _positive_int(
         training["batch_size"], "training.batch_size"
     )

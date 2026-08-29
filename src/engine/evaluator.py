@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from src.metrics import (
     compute_binary_boundary_f1,
+    compute_binary_hd,
     compute_binary_hd95_assd,
     compute_binary_surface_distances,
     compute_binary_surface_metrics,
@@ -23,6 +24,7 @@ from src.models import SegmentationOutput
 __all__ = [
     "compute_binary_boundary_f1",
     "compute_binary_dice_iou",
+    "compute_binary_hd",
     "compute_binary_hd95_assd",
     "compute_binary_surface_distances",
     "compute_binary_surface_metrics",
@@ -120,6 +122,7 @@ def evaluate(
     total_loss = 0.0
     total_dice = 0.0
     total_iou = 0.0
+    total_hd = 0.0
     total_hd95 = 0.0
     total_assd = 0.0
     total_boundary_f1 = 0.0
@@ -163,7 +166,7 @@ def evaluate(
 
                 if task == "multiclass":
                     dice, iou = compute_multiclass_dice_iou(logits, targets)
-                    hd95, assd, boundary_f1 = compute_multiclass_surface_metrics(
+                    max_hd, hd95, assd, boundary_f1 = compute_multiclass_surface_metrics(
                         logits,
                         targets,
                         boundary_tolerance=resolved_boundary_tolerance,
@@ -174,7 +177,7 @@ def evaluate(
                         targets,
                         threshold=threshold,
                     )
-                    hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+                    max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
                         logits,
                         targets,
                         threshold=threshold,
@@ -183,18 +186,20 @@ def evaluate(
                 if not torch.isfinite(dice).all() or not torch.isfinite(iou).all():
                     raise FloatingPointError("Non-finite evaluation metric detected.")
                 if not (
-                    torch.isfinite(hd95).all()
+                    torch.isfinite(max_hd).all()
+                    and torch.isfinite(hd95).all()
                     and torch.isfinite(assd).all()
                     and torch.isfinite(boundary_f1).all()
                 ):
                     raise FloatingPointError("Non-finite evaluation metric detected.")
-                total_hd95 += hd95.sum().item()
-                total_assd += assd.sum().item()
-                total_boundary_f1 += boundary_f1.sum().item()
 
                 total_loss += loss.item() * batch_size
                 total_dice += dice.sum().item()
                 total_iou += iou.sum().item()
+                total_hd += max_hd.sum().item()
+                total_hd95 += hd95.sum().item()
+                total_assd += assd.sum().item()
+                total_boundary_f1 += boundary_f1.sum().item()
                 total_samples += batch_size
     finally:
         model.train(was_training)
@@ -206,6 +211,7 @@ def evaluate(
         "loss": total_loss / total_samples,
         "dice": total_dice / total_samples,
         "iou": total_iou / total_samples,
+        "hd": total_hd / total_samples,
         "hd95": total_hd95 / total_samples,
         "assd": total_assd / total_samples,
         "boundary_f1": total_boundary_f1 / total_samples,

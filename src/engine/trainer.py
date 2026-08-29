@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from .evaluator import evaluate
+from .schedulers import is_per_iteration_scheduler
 from src.models import SegmentationOutput
 
 
@@ -87,6 +88,9 @@ class Trainer:
         self.model = model
         self.criterion = criterion
         self.scheduler = scheduler
+        # Per-iteration schedulers (e.g. WarmupPolyLR) are stepped inside the
+        # batch loop; epoch schedulers are stepped once per epoch.
+        self.step_scheduler_per_iteration = is_per_iteration_scheduler(scheduler)
         self.optimizer = optimizer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -160,7 +164,8 @@ class Trainer:
                 ),
             }
             history.append(entry)
-            self._step_scheduler(validation_metrics)
+            if not self.step_scheduler_per_iteration:
+                self._step_scheduler(validation_metrics)
 
 
             val_dice = entry["val_dice"]
@@ -305,6 +310,9 @@ class Trainer:
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
+
+            if self.step_scheduler_per_iteration:
+                self.scheduler.step()
 
             total_loss += loss.detach().item() * batch_size
             total_samples += batch_size
