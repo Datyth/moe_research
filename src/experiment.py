@@ -384,6 +384,7 @@ def execute_experiment(
             "loss": test_metrics["loss"],
             "dice": test_metrics["dice"],
             "iou": test_metrics["iou"],
+            "hd": test_metrics["hd"],
             "hd95": test_metrics["hd95"],
             "assd": test_metrics["assd"],
             "boundary_f1": test_metrics["boundary_f1"],
@@ -397,6 +398,7 @@ def execute_experiment(
         save_json(metadata_path, metadata)
         print(f"Test Dice        : {test_metrics['dice']:.6f}")
         print(f"Test IoU         : {test_metrics['iou']:.6f}")
+        print(f"Test HD          : {test_metrics['hd']:.6f}")
         print(f"Test HD95        : {test_metrics['hd95']:.6f}")
         print(f"Test ASSD        : {test_metrics['assd']:.6f}")
         print(f"Test Boundary F1 : {test_metrics['boundary_f1']:.6f}")
