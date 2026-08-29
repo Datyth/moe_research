@@ -1,0 +1,53 @@
+# Base config for Synapse/BTCV CT (14-class abdominal organ segmentation:
+# 13 organs + background). Missing experiment/model on purpose —
+# synapse_*.yaml extend this via `extends:` (see docs/segmentation_run_guide.md).
+#
+# Hyperparameters (optimizer/scheduler) and the 24/6 train/test case split
+# (manifest v2) are aligned to MoE-SAM (MICCAI 2025)'s reported BTCV
+# protocol (30 scans, 24 train / 6 test, 13 organs) — see the "Implementation
+# Details" section: AdamW lr=5e-4 + warmup, weight_decay=0.1, batch_size=8.
+# Resolution stays 256x256: the paper's 224x224 note applies only to its
+# separate 8-organ "Synapse CT" benchmark (18/12 split), not the 13-organ
+# BTCV protocol this dataset matches.
+
+seed: 42
+
+dataset:
+  name: synapse_btcv
+  root: dataset/synapse_btcv
+  manifest: manifests/synapse_btcv_v2.json
+  version: synapse-btcv-v2
+  task: multiclass
+  num_classes: 14
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+
+loss:
+  name: ce_dice
+  ce_weight: 0.5
+  dice_weight: 0.5
+  ignore_background: false
+
+optimizer:
+  name: adamw
+  lr: 0.0005
+  weight_decay: 0.1
+
+scheduler:
+  name: cosine_warmup
+  eta_min: 0.0
+  warmup_epochs: 5
+
+training:
+  epochs: 50
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: true
+  amp_dtype: bfloat16
+  prediction_threshold: 0.5
+  log_interval: 20
+  gradient_clip_norm: 1.0
+  early_stopping_patience: 10
