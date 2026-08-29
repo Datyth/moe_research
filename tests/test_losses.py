@@ -4,7 +4,7 @@ import unittest
 import torch
 from torch.nn import functional as F
 
-from src.losses import BCEDiceLoss, BCELoss, DiceLoss
+from src.losses import BCEDiceLoss, BCELoss, CEDiceLoss, DiceLoss, MulticlassDiceLoss
 from src.models import build_model
 
 
@@ -102,6 +102,49 @@ class TestBinarySegmentationLosses(unittest.TestCase):
                     "must have the same shape",
                 ):
                     criterion(self.good_logits, wrong_targets)
+
+
+class TestMulticlassSegmentationLosses(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.targets = torch.randint(0, 4, (2, 5, 5))
+        self.good_logits = torch.zeros(2, 4, 5, 5, requires_grad=False)
+        for class_index in range(4):
+            mask = self.targets == class_index
+            self.good_logits[:, class_index][mask] = 20.0
+            self.good_logits[:, class_index][~mask] = -20.0
+        self.good_logits.requires_grad_(True)
+        self.bad_logits = -self.good_logits.detach()
+
+    def test_multiclass_dice_rewards_better_predictions(self):
+        criterion = MulticlassDiceLoss()
+        good_loss = criterion(self.good_logits, self.targets)
+        bad_loss = criterion(self.bad_logits, self.targets)
+
+        self.assertLess(good_loss.item(), bad_loss.item())
+        self.assertLess(good_loss.item(), 1e-3)
+
+    def test_ce_dice_matches_pytorch_cross_entropy_component(self):
+        criterion = CEDiceLoss(ce_weight=1.0, dice_weight=0.0)
+        actual = criterion(self.good_logits, self.targets)
+        expected = torch.nn.functional.cross_entropy(self.good_logits, self.targets)
+
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-5))
+
+    def test_ce_dice_backward_produces_finite_gradients(self):
+        criterion = CEDiceLoss()
+        loss = criterion(self.good_logits, self.targets)
+        loss.backward()
+
+        self.assertEqual(loss.ndim, 0)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(self.good_logits.grad).all())
+
+    def test_multiclass_wrong_target_shape_raises_clear_error(self):
+        wrong_targets = torch.zeros(2, 3, 3, dtype=torch.long)
+
+        with self.assertRaisesRegex(ValueError, "must have shape"):
+            MulticlassDiceLoss()(self.good_logits, wrong_targets)
 
 
 if __name__ == "__main__":

@@ -178,10 +178,12 @@ def resolve_experiment_config(
             "image_size",
         ),
     )
-    if dataset["task"] != "binary":
-        raise ValueError("Experiment runner currently supports task='binary' only.")
-    if dataset["num_classes"] != 1:
+    if dataset["task"] not in {"binary", "multiclass"}:
+        raise ValueError("dataset.task must be 'binary' or 'multiclass'.")
+    if dataset["task"] == "binary" and dataset["num_classes"] != 1:
         raise ValueError("Binary segmentation requires dataset.num_classes=1.")
+    if dataset["task"] == "multiclass" and dataset["num_classes"] < 2:
+        raise ValueError("Multiclass segmentation requires dataset.num_classes >= 2.")
     _positive_int(dataset["in_channels"], "dataset.in_channels")
     image_size = dataset["image_size"]
     if (
@@ -229,14 +231,23 @@ def resolve_experiment_config(
     scheduler = config["scheduler"]
     _require_keys(scheduler, "scheduler", ("name",))
     scheduler_name = scheduler["name"]
-    if scheduler_name not in {"none", "cosine", "reduce_on_plateau"}:
+    if scheduler_name not in {"none", "cosine", "cosine_warmup", "reduce_on_plateau"}:
         raise ValueError(
-            "scheduler.name must be one of: none, cosine, reduce_on_plateau."
+            "scheduler.name must be one of: none, cosine, cosine_warmup, reduce_on_plateau."
         )
     if scheduler_name == "cosine":
         scheduler.setdefault("eta_min", 0.0)
         scheduler["eta_min"] = _positive_float(
             scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
+        )
+    elif scheduler_name == "cosine_warmup":
+        scheduler.setdefault("eta_min", 0.0)
+        scheduler.setdefault("warmup_epochs", 5)
+        scheduler["eta_min"] = _positive_float(
+            scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
+        )
+        scheduler["warmup_epochs"] = _positive_int(
+            scheduler["warmup_epochs"], "scheduler.warmup_epochs", allow_zero=True
         )
     elif scheduler_name == "reduce_on_plateau":
         scheduler.setdefault("factor", 0.1)
@@ -256,6 +267,11 @@ def resolve_experiment_config(
     training = config["training"]
     _require_keys(training, "training", ("epochs", "batch_size", "num_workers", "device", "amp"))
     training["epochs"] = _positive_int(training["epochs"], "training.epochs")
+    if (
+        scheduler_name == "cosine_warmup"
+        and scheduler["warmup_epochs"] >= training["epochs"]
+    ):
+        raise ValueError("scheduler.warmup_epochs must be less than training.epochs.")
     training["batch_size"] = _positive_int(
         training["batch_size"], "training.batch_size"
     )
@@ -273,6 +289,7 @@ def resolve_experiment_config(
     training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)
     training.setdefault("gradient_clip_norm", None)
+    training.setdefault("early_stopping_patience", None)
     threshold = float(training["prediction_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("training.prediction_threshold must be in [0, 1].")
@@ -289,6 +306,11 @@ def resolve_experiment_config(
     if gradient_clip_norm is not None:
         training["gradient_clip_norm"] = _positive_float(
             gradient_clip_norm, "training.gradient_clip_norm"
+        )
+    early_stopping_patience = training["early_stopping_patience"]
+    if early_stopping_patience is not None:
+        training["early_stopping_patience"] = _positive_int(
+            early_stopping_patience, "training.early_stopping_patience"
         )
 
     return config
