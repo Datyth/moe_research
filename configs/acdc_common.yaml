@@ -1,0 +1,52 @@
+# Base config for ACDC experiments following the MoE-SAM paper setup
+# (docs/research_papers/1526_paper.pdf): 150 labeled cardiac MRI cases,
+# classes {background, RV, MYO, LV}, 256x256 inputs, flipping/rotation/
+# scaling/intensity-shift augmentation, AdamW lr 5e-4, batch size 8,
+# loss L = (1 - alpha) * CE + Dice, metrics DSC and HD.
+
+seed: 42
+
+dataset:
+  name: acdc
+  # Relative paths resolve against the project root, so this works on any
+  # machine as long as the converted data lives in <repo>/dataset/acdc.
+  # To point at data outside the repo (e.g. a server mount), set the
+  # ACDC_DATA_ROOT environment variable and use `root: ${ACDC_DATA_ROOT}`
+  # here instead — no YAML edit required.
+  root: /home/teama/projects/project_01/dataset/acdc
+  manifest: manifests/acdc_v1.json
+  version: acdc-v1
+  task: multiclass
+  num_classes: 4
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+  mask_threshold: 0.5
+
+loss:
+  name: ce_dice
+  ce_weight: 0.5
+  dice_weight: 0.5
+
+optimizer:
+  name: adamw
+  lr: 0.0005
+  weight_decay: 0.1
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
+
+training:
+  epochs: 100
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: true
+  amp_dtype: bfloat16
+  prediction_threshold: 0.5
+  boundary_tolerance: 2
+  log_interval: 20
+  gradient_clip_norm: 1.0

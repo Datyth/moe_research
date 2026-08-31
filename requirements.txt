@@ -1,5 +1,6 @@
 huggingface-hub
 matplotlib
+nibabel
 monai
 numpy
 opencv-python

@@ -1,6 +1,7 @@
-"""Loss functions for binary segmentation."""
+"""Loss functions for binary and multiclass segmentation."""
 
 from .bce import BCELoss
+from .ce_dice import CEDiceLoss
 from .combined import BCEDiceLoss
 from .dice import DiceLoss
 from .registry import LOSS_REGISTRY, build_loss, register_loss
@@ -8,6 +9,7 @@ from .registry import LOSS_REGISTRY, build_loss, register_loss
 __all__ = [
     "BCELoss",
     "BCEDiceLoss",
+    "CEDiceLoss",
     "DiceLoss",
     "LOSS_REGISTRY",
     "build_loss",

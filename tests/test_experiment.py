@@ -266,6 +266,7 @@ class TestExperimentFramework(unittest.TestCase):
                     "loss",
                     "dice",
                     "iou",
+                    "hd",
                     "hd95",
                     "assd",
                     "boundary_f1",
@@ -294,6 +295,7 @@ class TestExperimentFramework(unittest.TestCase):
                     "loss": 1.0 - dice,
                     "dice": dice,
                     "iou": dice - 0.1,
+                    "hd": 2.0 * (1.0 - dice),
                     "hd95": 1.0 - dice,
                     "assd": 0.5 * (1.0 - dice),
                     "boundary_f1": dice - 0.05,
@@ -312,7 +314,7 @@ class TestExperimentFramework(unittest.TestCase):
             summary_path = runs_root / "summary.csv"
             write_summary_csv(summary_path, rows, aggregates)
             header = summary_path.read_text().splitlines()[0].split(",")
-            for metric_name in ("hd95", "assd", "boundary_f1"):
+            for metric_name in ("hd", "hd95", "assd", "boundary_f1"):
                 self.assertIn(metric_name, header)
                 self.assertIn(f"{metric_name}_mean", header)
                 self.assertIn(f"{metric_name}_std", header)

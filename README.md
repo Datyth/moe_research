@@ -70,6 +70,23 @@ bash scripts/02_prepare_isic2018_dataset.sh
 
 Raw archives and extracted source files are stored under `/home/teama/projects/project_01/dataset/raw/isic2018`. Converted images and sparse masks are stored under `/home/teama/projects/project_01/dataset/isic2018_task1`.
 
+### ACDC (cardiac MRI, multiclass)
+
+The ACDC pipeline targets the MoE-SAM paper setup (see `docs/research_papers/1526_paper.pdf`): labeled end-diastole/end-systole frames are converted to 2D slices, z-score normalized and clipped to [-3, 3] before 8-bit rescaling, and resized to 256x256 at training time. Labels keep the four ACDC classes (background, RV, MYO, LV). Because the official 50 test patients have no public labels, the 100 labeled patients are re-split by patient (60/20/20 by default) so no slice leaks across splits.
+
+Place the raw ACDC archive (`acdc.zip`, requires registration at the challenge site) under `dataset/raw/acdc/`, then run:
+
+```bash
+pip install nibabel
+bash scripts/03_prepare_acdc_dataset.sh
+```
+
+Converted 2D samples are stored under `dataset/acdc/` and the frozen patient-level split is defined by `manifests/acdc_v1.json`. Train the UNet baseline with the paper recipe (256x256, CE+Dice, AdamW lr 5e-4, DSC/HD metrics):
+
+```bash
+python scripts/run_experiment.py --config configs/acdc_unet.yaml
+```
+
 The frozen train, validation, and test split is defined by:
 
 ```text
@@ -112,7 +129,22 @@ loss:
   epsilon: 1.0e-7
 ```
 
-Available loss names are `bce`, `dice`, and `bce_dice`.
+Available loss names are `bce`, `dice`, and `bce_dice` for binary tasks, and `ce_dice` for multiclass tasks (ACDC), which combines cross-entropy and soft Dice over the foreground classes.
+
+### Dataset paths across machines
+
+`dataset.root`, `dataset.manifest` and `experiment.output_root` resolve as follows:
+
+- **Relative paths** (e.g. `dataset/acdc`) are resolved against the project root, so configs are portable as long as data lives inside the repository.
+- **Absolute paths** are used as-is.
+- **`${ENV_VAR}`** references are expanded at load time — use them to point at machine-specific data locations without editing YAML:
+
+```yaml
+dataset:
+  root: ${ACDC_DATA_ROOT}   # export ACDC_DATA_ROOT=/data/acdc on the server
+```
+
+An undefined environment variable raises a clear error at config load instead of failing later on a missing file.
 
 Summarize completed runs across multiple seeds:
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,14 @@ def _positive_float(value: Any, name: str, *, allow_zero: bool = False) -> float
 def _resolve_path(value: Any, project_root: Path, name: str) -> str:
     if not isinstance(value, (str, Path)) or not str(value):
         raise ValueError(f"{name} must be a non-empty path.")
-    path = Path(value).expanduser()
+    expanded = os.path.expandvars(str(value)).strip()
+    unresolved = re.findall(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*", expanded)
+    if unresolved:
+        raise ValueError(
+            f"{name} references undefined environment variable(s): "
+            f"{', '.join(sorted(set(unresolved)))}."
+        )
+    path = Path(expanded).expanduser()
     if not path.is_absolute():
         path = project_root / path
     return str(path.resolve())
@@ -178,10 +186,20 @@ def resolve_experiment_config(
             "image_size",
         ),
     )
-    if dataset["task"] != "binary":
-        raise ValueError("Experiment runner currently supports task='binary' only.")
-    if dataset["num_classes"] != 1:
+    if dataset["task"] not in ("binary", "multiclass"):
+        raise ValueError(
+            "dataset.task must be either 'binary' or 'multiclass'."
+        )
+    if dataset["task"] == "binary" and dataset["num_classes"] != 1:
         raise ValueError("Binary segmentation requires dataset.num_classes=1.")
+    if dataset["task"] == "multiclass" and (
+        isinstance(dataset["num_classes"], bool)
+        or not isinstance(dataset["num_classes"], int)
+        or dataset["num_classes"] < 2
+    ):
+        raise ValueError(
+            "Multiclass segmentation requires dataset.num_classes >= 2."
+        )
     _positive_int(dataset["in_channels"], "dataset.in_channels")
     image_size = dataset["image_size"]
     if (
@@ -229,15 +247,26 @@ def resolve_experiment_config(
     scheduler = config["scheduler"]
     _require_keys(scheduler, "scheduler", ("name",))
     scheduler_name = scheduler["name"]
-    if scheduler_name not in {"none", "cosine", "reduce_on_plateau"}:
+    if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
         raise ValueError(
-            "scheduler.name must be one of: none, cosine, reduce_on_plateau."
+            "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
+            "warmup_poly."
         )
     if scheduler_name == "cosine":
         scheduler.setdefault("eta_min", 0.0)
         scheduler["eta_min"] = _positive_float(
             scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
         )
+    elif scheduler_name == "warmup_poly":
+        scheduler.setdefault("warmup_steps", 250)
+        scheduler.setdefault("power", 0.9)
+        scheduler["warmup_steps"] = _positive_int(
+            scheduler["warmup_steps"], "scheduler.warmup_steps", allow_zero=True
+        )
+        power = _positive_float(scheduler["power"], "scheduler.power")
+        if power > 1.0:
+            raise ValueError("scheduler.power must be in (0, 1].")
+        scheduler["power"] = power
     elif scheduler_name == "reduce_on_plateau":
         scheduler.setdefault("factor", 0.1)
         scheduler.setdefault("patience", 5)

@@ -22,3 +22,6 @@ results/
 
 # Standardized experiment outputs
 runs/
+
+# Data files (repo-root only; do not ignore src/data/ or scripts/data/)
+/data/

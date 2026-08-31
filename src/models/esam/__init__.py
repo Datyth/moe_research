@@ -1,7 +1,8 @@
-"""E-SAM: SAM ViT backbone + Adapter fine-tuning + Sparse MoE routing.
+"""E-SAM: SAM ViT backbone + Adapter fine-tuning + Sparse MoE routing + LPEG.
 
 Ported from https://github.com/Asphyxiate-Rye/E-SAM (SAM-MoE, MICCAI 2025);
-see `_vendor/` for the vendored architecture and its deviations from upstream.
+see `_vendor/` for the vendored architecture and its deviations from upstream,
+and `lpeg.py` for the extracted Lightweight Prompt Embedding Generator.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ class EsamModel(BaseSegmentationModel):
         image_size: int = 256,
         checkpoint: str | None = None,
         use_moe: bool = True,
+        use_lpeg: bool = True,
         moe_num_experts: int = 4,
         moe_top_k_ratio: float = 0.5,
         freeze_backbone: bool = True,
@@ -56,6 +58,7 @@ class EsamModel(BaseSegmentationModel):
             moe_top_k_ratio=moe_top_k_ratio,
             moe_num_experts=moe_num_experts,
             use_moe=use_moe,
+            use_lpeg=use_lpeg,
         )
 
         if freeze_backbone:
@@ -64,8 +67,15 @@ class EsamModel(BaseSegmentationModel):
     def _freeze_pretrained_backbone(self) -> None:
         for name, param in self.network.image_encoder.named_parameters():
             param.requires_grad = "Adapter" in name
-        for param in self.network.prompt_encoder.parameters():
-            param.requires_grad = False
+        # Freeze the pretrained SAM prompt encoder, but keep the LPEG block
+        # trainable: it is randomly initialized (not present in the SAM
+        # checkpoint) and the paper trains it alongside adapters, the MoE-FEB
+        # and the mask decoder. Upstream's train.py freezes it entirely,
+        # leaving LPEG random — treated here as an upstream bug (paper §2:
+        # "MoE-SAM ... fine-tunes the adapters, feature enhancing block,
+        # prompt embedding generator, and mask decoder").
+        for name, param in self.network.prompt_encoder.named_parameters():
+            param.requires_grad = "lpeg" in name
 
     def forward(self, images: Tensor, **kwargs) -> SegmentationOutput:
         outputs = self.network(

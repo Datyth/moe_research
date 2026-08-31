@@ -1,4 +1,4 @@
-"""Surface metrics for binary 2D segmentation masks."""
+"""Region and surface metrics for binary 2D segmentation masks."""
 
 from __future__ import annotations
 
@@ -121,15 +121,15 @@ def _sample_surface_metrics(
     target: BinaryArray,
     *,
     boundary_tolerance: float,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     prediction_nonempty = bool(prediction.any())
     target_nonempty = bool(target.any())
     if not prediction_nonempty and not target_nonempty:
-        return 0.0, 0.0, 1.0
+        return 0.0, 0.0, 0.0, 1.0
     if prediction_nonempty != target_nonempty:
         height, width = prediction.shape
         maximum_distance = math.hypot(height - 1, width - 1)
-        return maximum_distance, maximum_distance, 0.0
+        return maximum_distance, maximum_distance, maximum_distance, 0.0
 
     prediction_surface = extract_binary_surface(prediction)
     target_surface = extract_binary_surface(target)
@@ -140,6 +140,7 @@ def _sample_surface_metrics(
     combined_distances = np.concatenate(
         (prediction_to_target, target_to_prediction)
     )
+    max_hd = float(combined_distances.max())
     hd95 = float(np.percentile(combined_distances, 95))
     assd = float(
         (prediction_to_target.sum() + target_to_prediction.sum())
@@ -160,7 +161,7 @@ def _sample_surface_metrics(
         * boundary_recall
         / precision_recall_sum
     )
-    return hd95, assd, boundary_f1
+    return max_hd, hd95, assd, boundary_f1
 
 
 def compute_binary_surface_metrics(
@@ -169,17 +170,20 @@ def compute_binary_surface_metrics(
     *,
     threshold: float = 0.5,
     boundary_tolerance: float = 2,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Compute per-sample HD95, ASSD and Boundary F1 for binary logits.
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Compute per-sample HD, HD95, ASSD and Boundary F1 for binary logits.
 
-    HD95 is the 95th percentile of the concatenated prediction-to-target and
-    target-to-prediction nearest-surface distances. ASSD is their summed distance
-    divided by the total number of surface pixels. Both are Euclidean distances
-    in pixels. Boundary F1 matches a surface pixel when its Euclidean distance to
-    the other surface is less than or equal to ``boundary_tolerance`` pixels.
+    HD is the maximum of the concatenated prediction-to-target and
+    target-to-prediction nearest-surface distances (classic Hausdorff
+    distance). HD95 is the 95th percentile of the same distance set. ASSD is
+    the summed distance divided by the total number of surface pixels. All
+    three are Euclidean distances in pixels. Boundary F1 matches a surface
+    pixel when its Euclidean distance to the other surface is less than or
+    equal to ``boundary_tolerance`` pixels.
 
-    Two empty masks return ``(0, 0, 1)``. If exactly one mask is empty, HD95 and
-    ASSD use the finite image-diagonal penalty and Boundary F1 is zero.
+    Two empty masks return ``(0, 0, 0, 1)``. If exactly one mask is empty, HD,
+    HD95 and ASSD use the finite image-diagonal penalty and Boundary F1 is
+    zero.
     """
 
     _validate_metric_inputs(logits, targets, threshold=threshold)
@@ -198,7 +202,23 @@ def compute_binary_surface_metrics(
         for prediction, target in zip(predictions, target_masks)
     ]
     metrics = torch.tensor(values, dtype=torch.float64)
-    return metrics[:, 0], metrics[:, 1], metrics[:, 2]
+    return metrics[:, 0], metrics[:, 1], metrics[:, 2], metrics[:, 3]
+
+
+def compute_binary_hd(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    threshold: float = 0.5,
+) -> Tensor:
+    """Compute per-sample maximum Hausdorff distance in pixel units."""
+
+    max_hd, _, _, _ = compute_binary_surface_metrics(
+        logits,
+        targets,
+        threshold=threshold,
+    )
+    return max_hd
 
 
 def compute_binary_hd95_assd(
@@ -209,12 +229,136 @@ def compute_binary_hd95_assd(
 ) -> tuple[Tensor, Tensor]:
     """Compute per-sample symmetric HD95 and ASSD in pixel units."""
 
-    hd95, assd, _ = compute_binary_surface_metrics(
+    _, hd95, assd, _ = compute_binary_surface_metrics(
         logits,
         targets,
         threshold=threshold,
     )
     return hd95, assd
+
+
+def compute_multiclass_dice_iou(
+    logits: Tensor,
+    targets: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Compute per-sample mean Dice and IoU over foreground classes.
+
+    ``logits`` must have shape ``[B, C, H, W]`` with ``C > 1`` and ``targets``
+    must contain integer class indices with shape ``[B, 1, H, W]`` or
+    ``[B, H, W]``. Predictions are taken as the argmax over the class
+    dimension. Metrics are computed independently for every foreground class
+    (all classes except background ``0``) and then averaged per sample. A
+    class that is absent in both prediction and target contributes a perfect
+    score, mirroring the binary implementation.
+    """
+
+    predictions, labels, num_classes = _resolve_multiclass(logits, targets)
+
+    dice_scores = []
+    iou_scores = []
+    ones = torch.ones(
+        predictions.shape[0],
+        dtype=torch.float32,
+        device=predictions.device,
+    )
+    for class_index in range(1, num_classes):
+        prediction_masks = (predictions == class_index).flatten(start_dim=1)
+        target_masks = (labels == class_index).flatten(start_dim=1)
+
+        intersection = torch.logical_and(
+            prediction_masks,
+            target_masks,
+        ).sum(dim=1).float()
+        prediction_size = prediction_masks.sum(dim=1).float()
+        target_size = target_masks.sum(dim=1).float()
+
+        dice_denominator = prediction_size + target_size
+        union = prediction_size + target_size - intersection
+
+        dice_scores.append(
+            torch.where(dice_denominator == 0, ones, 2.0 * intersection / dice_denominator)
+        )
+        iou_scores.append(
+            torch.where(union == 0, ones, intersection / union)
+        )
+
+    dice = torch.stack(dice_scores, dim=1).mean(dim=1)
+    iou = torch.stack(iou_scores, dim=1).mean(dim=1)
+    return dice, iou
+
+
+def compute_multiclass_surface_metrics(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    boundary_tolerance: float = 2,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Compute per-sample HD, HD95, ASSD and Boundary F1 for multiclass logits.
+
+    Surface metrics are computed per foreground class with the same rules as
+    the binary implementation (finite image-diagonal penalty when exactly one
+    of the two masks is empty) and then averaged per sample over all
+    foreground classes.
+    """
+
+    predictions, labels, num_classes = _resolve_multiclass(logits, targets)
+    tolerance = _validate_boundary_tolerance(boundary_tolerance)
+
+    predictions_np = predictions.detach().cpu().numpy()
+    labels_np = labels.detach().cpu().numpy()
+
+    values = []
+    for sample_predictions, sample_labels in zip(predictions_np, labels_np):
+        class_values = [
+            _sample_surface_metrics(
+                np.asarray(sample_predictions == class_index, dtype=bool),
+                np.asarray(sample_labels == class_index, dtype=bool),
+                boundary_tolerance=tolerance,
+            )
+            for class_index in range(1, num_classes)
+        ]
+        values.append(np.mean(class_values, axis=0))
+
+    metrics = torch.tensor(np.asarray(values), dtype=torch.float64)
+    return metrics[:, 0], metrics[:, 1], metrics[:, 2], metrics[:, 3]
+
+
+def _resolve_multiclass(
+    logits: Tensor,
+    targets: Tensor,
+) -> tuple[Tensor, Tensor, int]:
+    """Validate multiclass inputs and return (predictions, labels, C)."""
+
+    if logits.shape != targets.shape and not (
+        logits.ndim == 4
+        and targets.ndim == 4
+        and targets.shape[0] == logits.shape[0]
+        and targets.shape[1] == 1
+        and targets.shape[2:] == logits.shape[2:]
+    ):
+        raise ValueError(
+            "targets must be class indices with shape [B, H, W] or [B, 1, H, W] "
+            f"matching logits spatial size, got {tuple(targets.shape)} and "
+            f"{tuple(logits.shape)}."
+        )
+    if logits.ndim != 4 or logits.shape[1] <= 1:
+        raise ValueError(
+            "Multiclass metrics require logits with shape [B, C, H, W] and C > 1."
+        )
+
+    num_classes = int(logits.shape[1])
+    predictions = logits.argmax(dim=1)
+    labels = targets.reshape(targets.shape[0], *targets.shape[2:]).long()
+    if labels.shape != predictions.shape:
+        raise ValueError(
+            f"targets shape {tuple(labels.shape)} does not match prediction "
+            f"shape {tuple(predictions.shape)}."
+        )
+    if labels.min() < 0 or labels.max() >= num_classes:
+        raise ValueError(
+            f"targets contain class indices outside [0, {num_classes - 1}]."
+        )
+    return predictions, labels, num_classes
 
 
 def compute_binary_boundary_f1(
@@ -226,7 +370,7 @@ def compute_binary_boundary_f1(
 ) -> Tensor:
     """Compute per-sample boundary F1 within an inclusive pixel tolerance."""
 
-    _, _, boundary_f1 = compute_binary_surface_metrics(
+    _, _, _, boundary_f1 = compute_binary_surface_metrics(
         logits,
         targets,
         threshold=threshold,

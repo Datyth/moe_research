@@ -1,4 +1,4 @@
-"""Evaluation utilities for binary segmentation models."""
+"""Evaluation utilities for binary and multiclass segmentation models."""
 
 from __future__ import annotations
 
@@ -10,9 +10,12 @@ from torch.utils.data import DataLoader
 
 from src.metrics import (
     compute_binary_boundary_f1,
+    compute_binary_hd,
     compute_binary_hd95_assd,
     compute_binary_surface_distances,
     compute_binary_surface_metrics,
+    compute_multiclass_dice_iou,
+    compute_multiclass_surface_metrics,
     extract_binary_surface,
 )
 from src.models import SegmentationOutput
@@ -21,6 +24,7 @@ from src.models import SegmentationOutput
 __all__ = [
     "compute_binary_boundary_f1",
     "compute_binary_dice_iou",
+    "compute_binary_hd",
     "compute_binary_hd95_assd",
     "compute_binary_surface_distances",
     "compute_binary_surface_metrics",
@@ -70,6 +74,42 @@ def compute_binary_dice_iou(
     iou = torch.where(union == 0, ones, intersection / union)
     return dice, iou
 
+def _compute_dice_iou(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    threshold: float,
+) -> tuple[Tensor, Tensor]:
+    """Dispatch Dice/IoU computation based on the number of output classes."""
+
+    if logits.ndim == 4 and logits.shape[1] > 1:
+        return compute_multiclass_dice_iou(logits, targets)
+    return compute_binary_dice_iou(logits, targets, threshold=threshold)
+
+
+def _compute_surface_metrics(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    threshold: float,
+    boundary_tolerance: float,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Dispatch surface metric computation based on the number of classes."""
+
+    if logits.ndim == 4 and logits.shape[1] > 1:
+        return compute_multiclass_surface_metrics(
+            logits,
+            targets,
+            boundary_tolerance=boundary_tolerance,
+        )
+    return compute_binary_surface_metrics(
+        logits,
+        targets,
+        threshold=threshold,
+        boundary_tolerance=boundary_tolerance,
+    )
+
+
 def evaluate(
     *,
     model: nn.Module,
@@ -79,7 +119,12 @@ def evaluate(
     threshold: float = 0.5,
     boundary_tolerance: float = 2,
 ) -> dict[str, float]:
-    """Return sample-mean loss and binary region/surface metrics."""
+    """Return sample-mean loss and region/surface metrics.
+
+    Binary models (single output channel) use sigmoid-thresholded metrics;
+    multiclass models (more than one output channel) use argmax predictions
+    and average region/surface metrics over the foreground classes.
+    """
 
     if len(loader) == 0:
         raise ValueError("loader must contain at least one batch.")
@@ -113,6 +158,7 @@ def evaluate(
     total_loss = 0.0
     total_dice = 0.0
     total_iou = 0.0
+    total_hd = 0.0
     total_hd95 = 0.0
     total_assd = 0.0
     total_boundary_f1 = 0.0
@@ -153,21 +199,22 @@ def evaluate(
                 if not torch.isfinite(loss):
                     raise FloatingPointError("Non-finite evaluation loss detected.")
 
-                dice, iou = compute_binary_dice_iou(
+                dice, iou = _compute_dice_iou(
                     logits,
                     targets,
                     threshold=threshold,
                 )
                 if not torch.isfinite(dice).all() or not torch.isfinite(iou).all():
                     raise FloatingPointError("Non-finite evaluation metric detected.")
-                hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+                max_hd, hd95, assd, boundary_f1 = _compute_surface_metrics(
                     logits,
                     targets,
                     threshold=threshold,
                     boundary_tolerance=resolved_boundary_tolerance,
                 )
                 if not (
-                    torch.isfinite(hd95).all()
+                    torch.isfinite(max_hd).all()
+                    and torch.isfinite(hd95).all()
                     and torch.isfinite(assd).all()
                     and torch.isfinite(boundary_f1).all()
                 ):
@@ -176,6 +223,7 @@ def evaluate(
                 total_loss += loss.item() * batch_size
                 total_dice += dice.sum().item()
                 total_iou += iou.sum().item()
+                total_hd += max_hd.sum().item()
                 total_hd95 += hd95.sum().item()
                 total_assd += assd.sum().item()
                 total_boundary_f1 += boundary_f1.sum().item()
@@ -190,6 +238,7 @@ def evaluate(
         "loss": total_loss / total_samples,
         "dice": total_dice / total_samples,
         "iou": total_iou / total_samples,
+        "hd": total_hd / total_samples,
         "hd95": total_hd95 / total_samples,
         "assd": total_assd / total_samples,
         "boundary_f1": total_boundary_f1 / total_samples,

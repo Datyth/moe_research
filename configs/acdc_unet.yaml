@@ -1,0 +1,10 @@
+# ACDC baseline: UNet trained with the MoE-SAM paper's experimental setup.
+extends: acdc_common.yaml
+
+experiment:
+  name: unet_acdc
+  output_root: runs
+
+model:
+  name: unet
+  base_channels: 32

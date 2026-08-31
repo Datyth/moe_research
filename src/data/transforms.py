@@ -23,6 +23,9 @@ class SegmentationTransform:
         training: bool = False,
         horizontal_flip_probability: float = 0.5,
         vertical_flip_probability: float = 0.0,
+        rotation_range: float = 0.0,
+        scaling_range: tuple[float, float] = (1.0, 1.0),
+        intensity_shift_range: float = 0.0,
     ) -> None:
         if len(image_size) != 2 or any(size <= 0 for size in image_size):
             raise ValueError("image_size must contain two positive integers.")
@@ -34,12 +37,25 @@ class SegmentationTransform:
             if not 0.0 <= probability <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1].")
 
+        if rotation_range < 0:
+            raise ValueError("rotation_range must be non-negative.")
+        if len(scaling_range) != 2 or not 0 < scaling_range[0] <= scaling_range[1]:
+            raise ValueError(
+                "scaling_range must be (min_scale, max_scale) with "
+                "0 < min_scale <= max_scale."
+            )
+        if intensity_shift_range < 0:
+            raise ValueError("intensity_shift_range must be non-negative.")
+
         self.image_size = tuple(int(size) for size in image_size)
         self.image_mean = tuple(image_mean)
         self.image_std = tuple(image_std)
         self.training = training
         self.horizontal_flip_probability = horizontal_flip_probability
         self.vertical_flip_probability = vertical_flip_probability
+        self.rotation_range = float(rotation_range)
+        self.scaling_range = tuple(float(value) for value in scaling_range)
+        self.intensity_shift_range = float(intensity_shift_range)
 
     def __call__(self, image: Image.Image, mask: Tensor) -> tuple[Tensor, Tensor]:
         if not isinstance(image, Image.Image):
@@ -48,6 +64,11 @@ class SegmentationTransform:
             raise ValueError(
                 f"mask must have shape [C, H, W], got {tuple(mask.shape)}."
             )
+
+        # Geometric operations (affine/rotate) require float tensors; class
+        # indices are small integers so float32 represents them exactly and
+        # nearest-neighbor interpolation preserves them.
+        mask = mask.float()
 
         image = TF.resize(
             image,
@@ -69,7 +90,52 @@ class SegmentationTransform:
             image = TF.vflip(image)
             mask = TF.vflip(mask)
 
+        if self.training and self.rotation_range > 0:
+            angle = float(torch.empty(()).uniform_(-self.rotation_range, self.rotation_range))
+            image = TF.rotate(
+                image,
+                angle,
+                interpolation=InterpolationMode.BILINEAR,
+                fill=0,
+            )
+            mask = TF.rotate(mask, angle, interpolation=InterpolationMode.NEAREST, fill=0)
+
+        if self.training and self.scaling_range != (1.0, 1.0):
+            scale = float(
+                torch.empty(()).uniform_(self.scaling_range[0], self.scaling_range[1])
+            )
+            image = TF.affine(
+                image,
+                angle=0.0,
+                translate=(0, 0),
+                scale=scale,
+                shear=(0.0, 0.0),
+                interpolation=InterpolationMode.BILINEAR,
+                fill=0,
+            )
+            mask = TF.affine(
+                mask,
+                angle=0.0,
+                translate=(0, 0),
+                scale=scale,
+                shear=(0.0, 0.0),
+                interpolation=InterpolationMode.NEAREST,
+                fill=0,
+            )
+
         image_tensor = TF.pil_to_tensor(image).float().div(255.0)
+
+        if self.training and self.intensity_shift_range > 0:
+            # Paper augmentation: random intensity shifting on the raw [0, 1]
+            # image, applied before dataset normalization.
+            shift = float(
+                torch.empty(()).uniform_(
+                    -self.intensity_shift_range,
+                    self.intensity_shift_range,
+                )
+            )
+            image_tensor = (image_tensor + shift).clamp(0.0, 1.0)
+
         image_tensor = TF.normalize(
             image_tensor,
             self.image_mean,

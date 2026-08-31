@@ -30,6 +30,7 @@ def build_sam_vit_b(
     moe_top_k_ratio: float,
     moe_num_experts: int,
     use_moe: bool = True,
+    use_lpeg: bool = True,
 ) -> Sam_my:
     encoder_embed_dim = 768
     encoder_depth = 12
@@ -62,6 +63,7 @@ def build_sam_vit_b(
             image_embedding_size=(image_embedding_size, image_embedding_size),
             input_image_size=(image_size, image_size),
             mask_in_chans=16,
+            use_lpeg=use_lpeg,
         ),
         mask_decoder=MaskDecoder(
             args=args,
@@ -79,6 +81,7 @@ def build_sam_vit_b(
         moe_top_k_ratio=moe_top_k_ratio,
         moe_num_experts=moe_num_experts,
         use_moe=use_moe,
+        use_lpeg=use_lpeg,
         # Dataset pipeline already normalizes images; disable SAM's own
         # normalization to avoid doing it twice.
         pixel_mean=[0.0, 0.0, 0.0],
