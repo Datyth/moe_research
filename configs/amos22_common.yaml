@@ -1,0 +1,44 @@
+# Base config for AMOS22 CT (16-class abdominal organ segmentation).
+# Missing experiment/model on purpose — amos22_*.yaml extend this via
+# `extends:` (see docs/segmentation_run_guide.md).
+
+seed: 42
+
+dataset:
+  name: amos22_ct
+  root: dataset/amos22_ct
+  manifest: manifests/amos22_ct_v1.json
+  version: amos22-ct-v1
+  task: multiclass
+  num_classes: 16
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+
+loss:
+  name: ce_dice
+  ce_weight: 0.5
+  dice_weight: 0.5
+  ignore_background: false
+
+optimizer:
+  name: adamw
+  lr: 0.0001
+  weight_decay: 0.00001
+
+scheduler:
+  name: cosine
+  eta_min: 0.0
+
+training:
+  epochs: 50
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: true
+  amp_dtype: bfloat16
+  prediction_threshold: 0.5
+  log_interval: 20
+  gradient_clip_norm: 1.0
+  early_stopping_patience: 10

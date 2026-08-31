@@ -25,3 +25,8 @@ runs/
 
 # Data files (repo-root only; do not ignore src/data/ or scripts/data/)
 /data/
+# Private configuration files
+.env
+
+# Training run logs (tmux/CLI output dumps, not tracked artifacts)
+logs/

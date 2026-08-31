@@ -118,6 +118,7 @@ def evaluate(
     device: str | torch.device,
     threshold: float = 0.5,
     boundary_tolerance: float = 2,
+    task: str = "binary",
 ) -> dict[str, float]:
     """Return sample-mean loss and region/surface metrics.
 
@@ -126,6 +127,8 @@ def evaluate(
     and average region/surface metrics over the foreground classes.
     """
 
+    if task not in {"binary", "multiclass"}:
+        raise ValueError("task must be 'binary' or 'multiclass'.")
     if len(loader) == 0:
         raise ValueError("loader must contain at least one batch.")
     if not 0.0 <= threshold <= 1.0:
@@ -163,6 +166,7 @@ def evaluate(
     total_assd = 0.0
     total_boundary_f1 = 0.0
     total_samples = 0
+    target_dtype = torch.long if task == "multiclass" else torch.float32
 
     try:
         with torch.inference_mode():
@@ -178,7 +182,7 @@ def evaluate(
                 )
                 targets = batch["mask"].to(
                     resolved_device,
-                    dtype=torch.float32,
+                    dtype=target_dtype,
                     non_blocking=True,
                 )
                 batch_size = images.shape[0]

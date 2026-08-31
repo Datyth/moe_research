@@ -1,0 +1,14 @@
+# E0: SAM + Adapter, no MoE, on AMOS22 CT. Same as amos22_e1.yaml but
+# use_moe: false — isolates the MoE's contribution, same as isic2018_e0.yaml.
+extends: amos22_common.yaml
+
+experiment:
+  name: amos22_e0
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  freeze_backbone: true

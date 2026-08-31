@@ -345,8 +345,10 @@ def execute_experiment(
                 boundary_tolerance=float(training["boundary_tolerance"]),
                 use_amp=bool(training["amp"]),
                 amp_dtype=str(training["amp_dtype"]),
+                task=dataset_config.task,
                 log_interval=int(training["log_interval"]),
                 gradient_clip_norm=training["gradient_clip_norm"],
+                early_stopping_patience=training["early_stopping_patience"],
             ),
             checkpoint_metadata=_checkpoint_metadata(config, model_config),
         )
@@ -377,6 +379,7 @@ def execute_experiment(
             device=training["device"],
             threshold=float(training["prediction_threshold"]),
             boundary_tolerance=float(training["boundary_tolerance"]),
+            task=dataset_config.task,
         )
         test_payload = {
             "checkpoint": "best.pt",

@@ -2,6 +2,7 @@ huggingface-hub
 matplotlib
 nibabel
 monai
+nibabel
 numpy
 opencv-python
 pandas
@@ -9,6 +10,7 @@ Pillow
 scikit-image
 PyYAML
 scipy
+synapseclient
 timm
 torch
 torchvision

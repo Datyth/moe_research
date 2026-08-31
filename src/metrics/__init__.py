@@ -1,5 +1,6 @@
 """Metrics for segmentation experiments."""
 
+from .multiclass import compute_multiclass_dice_iou, compute_multiclass_surface_metrics
 from .segmentation import (
     compute_binary_boundary_f1,
     compute_binary_hd,

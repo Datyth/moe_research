@@ -65,9 +65,12 @@ training:
   boundary_tolerance: 2
   log_interval: 20
   gradient_clip_norm: null
+  early_stopping_patience: null
 ```
 
 `training.amp_dtype` nhận `float16` (mặc định) hoặc `bfloat16`. Đổi sang `bfloat16` khi thấy `FloatingPointError: Non-finite loss detected` giữa chừng training trên GPU hỗ trợ bf16 (Ampere trở lên) — `float16` có dải số mũ hẹp (±65504) nên các kiến trúc có phép nhân không chuẩn hóa ở tầng cuối (ví dụ mask decoder kiểu SAM trong `esam`) dễ tràn số sau vài epoch dù đã bật `gradient_clip_norm`; `bfloat16` có cùng dải số mũ với `float32` nên không gặp lỗi này, đổi lại giảm độ chính xác mantissa. `GradScaler` tự động vô hiệu hoá khi dùng `bfloat16` vì loss-scaling chỉ cần thiết cho `float16`.
+
+`training.early_stopping_patience` mặc định `null` (tắt, chạy đủ `epochs`). Đặt 1 số nguyên dương để dừng sớm khi validation Dice không cải thiện sau bấy nhiêu epoch liên tiếp — hữu ích cho dataset lớn (ví dụ AMOS22, ~10x số sample so với ISIC2018) nơi chạy đủ 50 epoch tốn nhiều giờ. Streak "không cải thiện" được lưu vào checkpoint và khôi phục đúng khi resume.
 
 #### Chia sẻ hyperparameter chung giữa nhiều config bằng `extends`
 
@@ -164,7 +167,15 @@ masks  : float32 [B, 1, H, W]
 logits : float   [B, 1, H, W]
 ```
 
-Model trả raw logits. Không gọi sigmoid trước BCE, Dice hoặc BCE+Dice. Sigmoid chỉ được dùng khi tính prediction và metrics.
+Multiclass segmentation (`dataset.task: multiclass`, ví dụ `amos22_ct`, `synapse_btcv`) dùng shape:
+
+```text
+images : float32 [B, 3, H, W]
+masks  : int64   [B, H, W]        # class index, không one-hot
+logits : float   [B, num_classes, H, W]
+```
+
+Model trả raw logits (chưa softmax) trong cả hai trường hợp. Không gọi sigmoid/softmax trước loss — loss tự quyết định cách chuyển logits (BCE/Dice dùng sigmoid cho binary, `ce_dice`/`multiclass_dice` dùng softmax cho multiclass). Sigmoid/softmax chỉ được dùng khi tính prediction và metrics. Metric multiclass gồm `compute_multiclass_dice_iou` (Dice/IoU) và `compute_multiclass_surface_metrics` (HD95/ASSD/Boundary F1) — cả hai đều class-mean, bỏ qua background theo mặc định, và bỏ qua class không xuất hiện ở cả prediction lẫn target cho sample đó. `compute_multiclass_surface_metrics` coi mỗi class là một bài toán binary riêng (class đó vs phần còn lại) rồi tái dùng đúng logic surface-distance của `compute_binary_surface_metrics`, sau đó trung bình qua các class có mặt.
 
 ### Frozen dataset split
 
@@ -394,6 +405,7 @@ Manifest phải là artifact versioned và tracked bởi Git; data root chỉ ch
 - Loss tương ứng là `ce_dice` (CE + soft Dice trên các foreground class), metric được evaluator tự động chuyển sang argmax per-class khi logits có nhiều hơn 1 channel.
 - Train transform áp augmentation của paper: flip ngang/dọc, rotation ±15°, scaling 0.8–1.2, intensity shift ±0.1 (xem `TRAIN_AUGMENTATION_KWARGS`).
 - Split là patient-level (không slice nào của một bệnh nhân rơi vào hai split) và được freeze trong `manifests/acdc_v1.json`; tạo bằng `scripts/data/prepare_acdc.py` hoặc `scripts/03_prepare_acdc_dataset.sh`.
+Nguồn 3D (NIfTI CT/MRI, ví dụ `amos22_ct`, `synapse_btcv`) phải cắt thành slice 2D ở bước conversion (`scripts/data/ct_conversion.py`, dùng chung cho cả hai — xem `amos22_conversion.py`/`synapse_conversion.py` cho phần label map riêng từng dataset), không load 3D trực tiếp trong Dataset — mọi model trong framework này (kể cả `esam`, dựa trên SAM) chỉ nhận ảnh 2D. Case-level split (không phải slice-level) là bắt buộc để tránh leak: slice của cùng 1 bệnh nhân không được xuất hiện ở cả train và test (xem `scripts/data/prepare_amos22.py:split_cases`, dùng lại được cho dataset CT khác). `AMOS22Dataset`/`SynapseDataset` đều kế thừa `CTSliceDataset` (`src/data/ct_slice.py`) vì format on-disk và cách đọc manifest giống hệt nhau — chỉ khác registry name.
 
 ### Scheduler và optimizer
 

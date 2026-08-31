@@ -248,7 +248,10 @@ def resolve_experiment_config(
     _require_keys(scheduler, "scheduler", ("name",))
     scheduler_name = scheduler["name"]
     if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
+    if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
         raise ValueError(
+            "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
+            "warmup_poly."
             "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
             "warmup_poly."
         )
@@ -257,6 +260,16 @@ def resolve_experiment_config(
         scheduler["eta_min"] = _positive_float(
             scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
         )
+    elif scheduler_name == "warmup_poly":
+        scheduler.setdefault("warmup_steps", 250)
+        scheduler.setdefault("power", 0.9)
+        scheduler["warmup_steps"] = _positive_int(
+            scheduler["warmup_steps"], "scheduler.warmup_steps", allow_zero=True
+        )
+        power = _positive_float(scheduler["power"], "scheduler.power")
+        if power > 1.0:
+            raise ValueError("scheduler.power must be in (0, 1].")
+        scheduler["power"] = power
     elif scheduler_name == "warmup_poly":
         scheduler.setdefault("warmup_steps", 250)
         scheduler.setdefault("power", 0.9)
@@ -302,6 +315,7 @@ def resolve_experiment_config(
     training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)
     training.setdefault("gradient_clip_norm", None)
+    training.setdefault("early_stopping_patience", None)
     threshold = float(training["prediction_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("training.prediction_threshold must be in [0, 1].")
@@ -318,6 +332,11 @@ def resolve_experiment_config(
     if gradient_clip_norm is not None:
         training["gradient_clip_norm"] = _positive_float(
             gradient_clip_norm, "training.gradient_clip_norm"
+        )
+    early_stopping_patience = training["early_stopping_patience"]
+    if early_stopping_patience is not None:
+        training["early_stopping_patience"] = _positive_int(
+            early_stopping_patience, "training.early_stopping_patience"
         )
 
     return config
