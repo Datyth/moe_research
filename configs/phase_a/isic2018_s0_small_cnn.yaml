@@ -1,0 +1,20 @@
+extends: isic2018_shape_common.yaml
+
+experiment:
+  name: phase_a_s0_small_cnn
+  output_root: runs
+
+model:
+  name: shape_autoencoder
+
+  encoder:
+    name: small_cnn
+
+  projector:
+    channels: 64
+    spatial_size: 4
+    bottleneck_dim: 256
+
+  decoder:
+    start_channels: 128
+    start_size: 8

@@ -2,6 +2,7 @@
 
 from .segmentation import (
     compute_binary_boundary_f1,
+    compute_binary_dice_iou,
     compute_binary_hd95_assd,
     compute_binary_surface_distances,
     compute_binary_surface_metrics,
@@ -10,6 +11,7 @@ from .segmentation import (
 
 __all__ = [
     "compute_binary_boundary_f1",
+    "compute_binary_dice_iou",
     "compute_binary_hd95_assd",
     "compute_binary_surface_distances",
     "compute_binary_surface_metrics",

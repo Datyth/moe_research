@@ -1,42 +1,41 @@
-"""Training loop with validation and checkpointing for segmentation models."""
+"""Task-agnostic training, validation, and checkpointing."""
 
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
-from torch import Tensor, nn
+from torch import nn
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
 
-from .evaluator import evaluate
-from src.models import SegmentationOutput
+from src.tasks import Task
+
+from .evaluator import evaluate, validate_step_output
 
 
-
-HistoryEntry = dict[str, int | float | None]
+HistoryEntry = dict[str, int | float]
 
 
 @dataclass(frozen=True)
 class TrainerConfig:
-    """Configuration for a segmentation training experiment."""
+    """Engine-level configuration for a training experiment."""
 
     epochs: int = 1
     device: str = "cuda"
     last_checkpoint_path: Path = Path("runs/default/last.pt")
     best_checkpoint_path: Path = Path("runs/default/best.pt")
     history_path: Path = Path("runs/default/history.json")
-    prediction_threshold: float = 0.5
-    boundary_tolerance: float = 2
     use_amp: bool = True
     amp_dtype: str = "float16"
     log_interval: int = 20
     gradient_clip_norm: float | None = None
+    monitor: str = "dice"
+    monitor_mode: str = "max"
 
     def __post_init__(self) -> None:
         if self.epochs <= 0:
@@ -45,41 +44,40 @@ class TrainerConfig:
             raise ValueError("amp_dtype must be 'float16' or 'bfloat16'.")
         if self.log_interval <= 0:
             raise ValueError("log_interval must be positive.")
-        if not 0.0 <= self.prediction_threshold <= 1.0:
-            raise ValueError("prediction_threshold must be in [0, 1].")
-        if (
-            isinstance(self.boundary_tolerance, bool)
-            or not isinstance(self.boundary_tolerance, (int, float))
-            or not math.isfinite(float(self.boundary_tolerance))
-            or self.boundary_tolerance < 0
-        ):
-            raise ValueError("boundary_tolerance must be a non-negative number.")
-        if (
-            self.gradient_clip_norm is not None
-            and self.gradient_clip_norm <= 0
-        ):
+        if self.gradient_clip_norm is not None and self.gradient_clip_norm <= 0:
             raise ValueError("gradient_clip_norm must be positive.")
         if Path(self.last_checkpoint_path) == Path(self.best_checkpoint_path):
             raise ValueError("last and best checkpoint paths must be different.")
+        if not isinstance(self.monitor, str) or not self.monitor:
+            raise ValueError("monitor must be a non-empty string.")
+        if (
+            not isinstance(self.monitor_mode, str)
+            or self.monitor_mode not in {"min", "max"}
+        ):
+            raise ValueError("monitor_mode must be 'min' or 'max'.")
 
 
 class Trainer:
-    """Train a segmentation model, validate it and save best/last state."""
+    """Optimize any model through a task-defined batch contract."""
 
     def __init__(
         self,
         *,
         model: nn.Module,
-        criterion: nn.Module,
-        scheduler: Any | None = None,
+        task: Task,
         optimizer: Optimizer,
         train_loader: DataLoader,
         config: TrainerConfig,
+        scheduler: Any | None = None,
         val_loader: DataLoader | None = None,
+        task_config: dict[str, Any] | None = None,
         checkpoint_metadata: dict[str, Any] | None = None,
     ) -> None:
+        if task_config is not None and not isinstance(task_config, dict):
+            raise TypeError("task_config must be a dictionary or None.")
         self.model = model
-        self.criterion = criterion
+        self.task = task
+        self.task_config = dict(task_config or {})
         self.scheduler = scheduler
         self.optimizer = optimizer
         self.train_loader = train_loader
@@ -89,7 +87,7 @@ class Trainer:
         self.device = torch.device(config.device)
         self.start_epoch = 1
         self.history: list[HistoryEntry] = []
-        self.best_val_dice: float | None = None
+        self.best_monitor_value: float | None = None
 
         if self.device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(
@@ -104,98 +102,103 @@ class Trainer:
         self.amp_dtype = (
             torch.bfloat16 if config.amp_dtype == "bfloat16" else torch.float16
         )
-        # bfloat16 doesn't need loss scaling; enabled=False makes GradScaler
-        # a documented no-op passthrough, so no separate code path is needed.
         self.scaler = torch.amp.GradScaler(
             device="cuda",
             enabled=self.amp_enabled and self.amp_dtype is torch.float16,
         )
-
         self.model.to(self.device)
-        self.criterion.to(self.device)
+        self.task.criterion.to(self.device)
 
     def train(self) -> list[HistoryEntry]:
-        """Run all epochs and return train/validation metric history."""
-
-        history = self.history
+        """Run configured epochs and return dynamic metric history."""
 
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             train_loss = self._train_epoch(epoch)
-            validation_metrics = None
+            validation_metrics: dict[str, float] | None = None
             if self.val_loader is not None:
                 validation_metrics = evaluate(
                     model=self.model,
                     loader=self.val_loader,
-                    criterion=self.criterion,
+                    task=self.task,
                     device=self.device,
-                    threshold=self.config.prediction_threshold,
-                    boundary_tolerance=self.config.boundary_tolerance,
                 )
+                if self.config.monitor not in validation_metrics:
+                    raise ValueError(
+                        f"Monitored metric {self.config.monitor!r} was not returned "
+                        "by validation."
+                    )
 
-            entry: HistoryEntry = {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "val_loss": (
-                    validation_metrics["loss"]
-                    if validation_metrics is not None
-                    else None
-                ),
-                "val_dice": (
-                    validation_metrics["dice"]
-                    if validation_metrics is not None
-                    else None
-                ),
-                "val_iou": (
-                    validation_metrics["iou"]
-                    if validation_metrics is not None
-                    else None
-                ),
-            }
-            history.append(entry)
+            entry: HistoryEntry = {"epoch": epoch, "train_loss": train_loss}
+            if validation_metrics is not None:
+                entry.update(
+                    {
+                        f"val_{name}": value
+                        for name, value in validation_metrics.items()
+                    }
+                )
+            self.history.append(entry)
             self._step_scheduler(validation_metrics)
 
-
-            val_dice = entry["val_dice"]
-            if isinstance(val_dice, float) and (
-                self.best_val_dice is None or val_dice > self.best_val_dice
-            ):
-                self.best_val_dice = val_dice
-                self._save_checkpoint(
-                    path=self.config.best_checkpoint_path,
-                    epoch=epoch,
-                    metrics=entry,
-                )
+            if validation_metrics is not None:
+                monitored_value = validation_metrics[self.config.monitor]
+                if self._is_improved(monitored_value):
+                    self.best_monitor_value = monitored_value
+                    self._save_checkpoint(
+                        path=self.config.best_checkpoint_path,
+                        epoch=epoch,
+                        metrics=entry,
+                    )
 
             self._save_checkpoint(
                 path=self.config.last_checkpoint_path,
                 epoch=epoch,
                 metrics=entry,
             )
-            self._save_history(history)
+            self._save_history()
             self._print_epoch_summary(entry)
 
-        return history
+        return self.history
+
     def resume(self, checkpoint_path: Path) -> int:
-        """Restore a versioned last checkpoint and return its completed epoch."""
+        """Restore a compatible version-2 checkpoint and history."""
 
         path = Path(checkpoint_path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"Resume checkpoint not found: {path}")
-        checkpoint = torch.load(
-            path,
-            map_location=self.device,
-            weights_only=False,
-        )
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         if not isinstance(checkpoint, dict) or checkpoint.get("format_version") != 2:
+            raise ValueError("Resume requires a version-2 experiment checkpoint.")
+
+        monitor_fields = (
+            "monitor_name",
+            "monitor_mode",
+            "best_monitor_value",
+        )
+        present_monitor_fields = [name in checkpoint for name in monitor_fields]
+        if any(present_monitor_fields) and not all(present_monitor_fields):
+            raise ValueError("Checkpoint has incomplete generic monitor metadata.")
+        is_generic_checkpoint = all(present_monitor_fields)
+        if is_generic_checkpoint:
+            saved_monitor = checkpoint["monitor_name"]
+            saved_mode = checkpoint["monitor_mode"]
+            saved_best = checkpoint["best_monitor_value"]
+        else:
+            saved_monitor = "dice"
+            saved_mode = "max"
+            saved_best = checkpoint.get("best_val_dice")
+        if (
+            saved_monitor != self.config.monitor
+            or saved_mode != self.config.monitor_mode
+        ):
             raise ValueError(
-                "Resume requires a version-2 experiment checkpoint. "
-                "Legacy checkpoints remain evaluation-only."
+                "Checkpoint monitor configuration "
+                f"{saved_monitor!r}/{saved_mode!r} does not match current "
+                f"{self.config.monitor!r}/{self.config.monitor_mode!r}."
             )
 
         self.model.load_state_dict(checkpoint["model_state_dict"], strict=True)
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
-
         scheduler_state = checkpoint.get("scheduler_state_dict")
         if self.scheduler is None and scheduler_state is not None:
             raise ValueError("Checkpoint contains a scheduler but config uses none.")
@@ -206,9 +209,8 @@ class Trainer:
 
         completed_epoch = int(checkpoint["epoch"])
         self.start_epoch = completed_epoch + 1
-        best_val_dice = checkpoint.get("best_val_dice")
-        self.best_val_dice = (
-            None if best_val_dice is None else float(best_val_dice)
+        self.best_monitor_value = (
+            None if saved_best is None else float(saved_best)
         )
 
         history_path = Path(self.config.history_path)
@@ -220,12 +222,27 @@ class Trainer:
             history = json.load(file)
         if not isinstance(history, list):
             raise ValueError("Resume history must contain a JSON list.")
-        if history and int(history[-1]["epoch"]) != completed_epoch:
+        if not history or int(history[-1]["epoch"]) != completed_epoch:
             raise ValueError(
                 "Resume history and last checkpoint disagree on completed epoch."
             )
+        if is_generic_checkpoint:
+            saved_metrics = checkpoint.get("metrics")
+            if not isinstance(saved_metrics, dict):
+                raise ValueError("Generic checkpoint metrics must be a dictionary.")
+            if history[-1] != saved_metrics:
+                raise ValueError(
+                    "Resume history and checkpoint metrics disagree on the saved epoch."
+                )
         self.history = history
         return completed_epoch
+
+    def _is_improved(self, value: float) -> bool:
+        if self.best_monitor_value is None:
+            return True
+        if self.config.monitor_mode == "max":
+            return value > self.best_monitor_value
+        return value < self.best_monitor_value
 
     def _step_scheduler(self, validation_metrics: dict[str, float] | None) -> None:
         if self.scheduler is None:
@@ -237,96 +254,49 @@ class Trainer:
         else:
             self.scheduler.step()
 
-
     def _train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
         total_samples = 0
         number_of_batches = len(self.train_loader)
 
-        for step, batch in enumerate(self.train_loader, start=1):
-            images, targets = self._prepare_batch(batch)
-            batch_size = images.shape[0]
-
+        for batch_number, batch in enumerate(self.train_loader, start=1):
             self.optimizer.zero_grad(set_to_none=True)
-
             with torch.autocast(
                 device_type=self.device.type,
                 dtype=self.amp_dtype,
                 enabled=self.amp_enabled,
             ):
-                output = self.model(images)
-                logits = self._extract_logits(output)
-                loss = self.criterion(logits, targets)
-
-            if loss.ndim != 0:
-                raise ValueError(
-                    "criterion must return a scalar loss, got "
-                    f"shape {tuple(loss.shape)}."
-                )
-            if not torch.isfinite(loss):
-                raise FloatingPointError(
-                    f"Non-finite loss detected at epoch {epoch}, step {step}."
-                )
+                step = self.task.training_step(self.model, batch, self.device)
+            validate_step_output(step)
+            loss = step.loss
 
             self.scaler.scale(loss).backward()
-
             if self.config.gradient_clip_norm is not None:
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config.gradient_clip_norm,
                 )
-
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            total_loss += loss.detach().item() * batch_size
-            total_samples += batch_size
-
+            total_loss += loss.detach().item() * step.batch_size
+            total_samples += step.batch_size
             if (
-                step == 1
-                or step % self.config.log_interval == 0
-                or step == number_of_batches
+                batch_number == 1
+                or batch_number % self.config.log_interval == 0
+                or batch_number == number_of_batches
             ):
-                running_loss = total_loss / total_samples
                 print(
                     f"Epoch {epoch}/{self.config.epochs} "
-                    f"- batch {step}/{number_of_batches} "
-                    f"- loss: {running_loss:.6f}"
+                    f"- batch {batch_number}/{number_of_batches} "
+                    f"- loss: {total_loss / total_samples:.6f}"
                 )
 
+        if total_samples == 0:
+            raise ValueError("train_loader produced zero samples.")
         return total_loss / total_samples
-
-    def _prepare_batch(
-        self,
-        batch: dict[str, Any],
-    ) -> tuple[Tensor, Tensor]:
-        if "image" not in batch or "mask" not in batch:
-            raise KeyError(
-                "Each training batch must contain 'image' and 'mask'."
-            )
-
-        images = batch["image"].to(
-            self.device,
-            dtype=torch.float32,
-            non_blocking=True,
-        )
-        targets = batch["mask"].to(
-            self.device,
-            dtype=torch.float32,
-            non_blocking=True,
-        )
-        return images, targets
-
-    @staticmethod
-    def _extract_logits(output: Any) -> Tensor:
-        if not isinstance(output, SegmentationOutput):
-            raise TypeError(
-                "Model forward must return SegmentationOutput, got "
-                f"{type(output).__name__}."
-            )
-        return output.logits
 
     def _save_checkpoint(
         self,
@@ -337,47 +307,46 @@ class Trainer:
     ) -> None:
         checkpoint_path = Path(path)
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = checkpoint_path.with_suffix(
-            checkpoint_path.suffix + ".tmp"
-        )
-
+        temporary_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
         checkpoint = {
             "format_version": 2,
             "epoch": epoch,
             "model_class": type(self.model).__name__,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
-            "scaler_state_dict": self.scaler.state_dict(),
             "scheduler_state_dict": (
                 None if self.scheduler is None else self.scheduler.state_dict()
             ),
-            "train_loss": metrics["train_loss"],
-            "val_loss": metrics["val_loss"],
-            "val_dice": metrics["val_dice"],
-            "val_iou": metrics["val_iou"],
-            "best_val_dice": self.best_val_dice,
+            "scaler_state_dict": self.scaler.state_dict(),
+            "metrics": dict(metrics),
+            "monitor_name": self.config.monitor,
+            "monitor_mode": self.config.monitor_mode,
+            "best_monitor_value": self.best_monitor_value,
             "trainer_config": asdict(self.config),
+            "task_config": dict(self.task_config),
             "metadata": self.checkpoint_metadata,
         }
+        if self.config.monitor == "dice" and self.config.monitor_mode == "max":
+            checkpoint["best_val_dice"] = self.best_monitor_value
         torch.save(checkpoint, temporary_path)
         temporary_path.replace(checkpoint_path)
 
-    def _save_history(self, history: list[HistoryEntry]) -> None:
+    def _save_history(self) -> None:
         history_path = Path(self.config.history_path)
         history_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = history_path.with_suffix(history_path.suffix + ".tmp")
         with temporary_path.open("w", encoding="utf-8") as file:
-            json.dump(history, file, indent=2)
+            json.dump(self.history, file, indent=2)
             file.write("\n")
         temporary_path.replace(history_path)
 
     def _print_epoch_summary(self, metrics: HistoryEntry) -> None:
         print(f"Epoch {metrics['epoch']}/{self.config.epochs} completed")
         print(f"Train Loss : {metrics['train_loss']:.6f}")
-        if metrics["val_loss"] is not None:
-            print(f"Val Loss   : {metrics['val_loss']:.6f}")
-            print(f"Val Dice   : {metrics['val_dice']:.6f}")
-            print(f"Val IoU    : {metrics['val_iou']:.6f}")
+        for name, value in metrics.items():
+            if name.startswith("val_"):
+                label = name[4:].replace("_", " ").title()
+                print(f"Val {label} : {value:.6f}")
         print(f"Last checkpoint: {self.config.last_checkpoint_path}")
-        if self.best_val_dice is not None:
+        if self.best_monitor_value is not None:
             print(f"Best checkpoint: {self.config.best_checkpoint_path}")

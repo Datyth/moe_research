@@ -273,6 +273,8 @@ def resolve_experiment_config(
     training.setdefault("boundary_tolerance", 2)
     training.setdefault("log_interval", 20)
     training.setdefault("gradient_clip_norm", None)
+    training.setdefault("monitor", "dice")
+    training.setdefault("monitor_mode", "max")
     threshold = float(training["prediction_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("training.prediction_threshold must be in [0, 1].")
@@ -285,6 +287,13 @@ def resolve_experiment_config(
     training["log_interval"] = _positive_int(
         training["log_interval"], "training.log_interval"
     )
+    if not isinstance(training["monitor"], str) or not training["monitor"]:
+        raise ValueError("training.monitor must be a non-empty string.")
+    if (
+        not isinstance(training["monitor_mode"], str)
+        or training["monitor_mode"] not in {"min", "max"}
+    ):
+        raise ValueError("training.monitor_mode must be 'min' or 'max'.")
     gradient_clip_norm = training["gradient_clip_norm"]
     if gradient_clip_norm is not None:
         training["gradient_clip_norm"] = _positive_float(
