@@ -29,6 +29,7 @@ from src.data import build_dataset
 from src.engine import evaluate
 from src.losses import build_loss
 from src.models import SegmentationOutput, build_model
+from src.tasks import SegmentationTask
 
 
 DEFAULT_MODEL_CONFIG: dict[str, Any] = {
@@ -119,9 +120,12 @@ def _checkpoint_configs(
     saved_loss_config = metadata.get("loss_config")
     if isinstance(saved_loss_config, dict):
         loss_config.update(saved_loss_config)
+    saved_task_config = checkpoint.get("task_config")
     saved_trainer_config = checkpoint.get("trainer_config")
     saved_threshold = None
-    if isinstance(saved_trainer_config, dict):
+    if isinstance(saved_task_config, dict):
+        saved_threshold = saved_task_config.get("threshold")
+    if saved_threshold is None and isinstance(saved_trainer_config, dict):
         saved_threshold = saved_trainer_config.get("prediction_threshold")
     threshold = (
         args.threshold
@@ -132,7 +136,9 @@ def _checkpoint_configs(
         raise ValueError("threshold must be in [0, 1].")
 
     saved_boundary_tolerance = None
-    if isinstance(saved_trainer_config, dict):
+    if isinstance(saved_task_config, dict):
+        saved_boundary_tolerance = saved_task_config.get("boundary_tolerance")
+    if saved_boundary_tolerance is None and isinstance(saved_trainer_config, dict):
         saved_boundary_tolerance = saved_trainer_config.get("boundary_tolerance")
     boundary_tolerance = (
         args.boundary_tolerance
@@ -352,14 +358,17 @@ def main() -> None:
     device = torch.device(args.device)
     model.to(device)
     criterion = build_loss(loss_config)
+    task = SegmentationTask(
+        criterion=criterion,
+        threshold=threshold,
+        boundary_tolerance=boundary_tolerance,
+    )
 
     metrics = evaluate(
         model=model,
         loader=loader,
-        criterion=criterion,
+        task=task,
         device=device,
-        threshold=threshold,
-        boundary_tolerance=boundary_tolerance,
     )
     output_dir = args.output_dir.expanduser().resolve()
     metrics_payload = {

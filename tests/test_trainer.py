@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader, Dataset
 from src.engine import Trainer, TrainerConfig
 from src.losses import BCEDiceLoss
 from src.models import build_model
+from src.models.shape import ShapeAutoencoderOutput
+from src.tasks import MaskReconstructionTask, SegmentationTask
 
 
 class TinySegmentationDataset(Dataset):
@@ -32,6 +34,8 @@ def build_tiny_trainer(
     with_validation: bool,
     epochs: int = 1,
     scheduler_name: str = "none",
+    monitor: str = "dice",
+    monitor_mode: str = "max",
 ) -> Trainer:
     model_config = {
         "name": "unet",
@@ -50,9 +54,16 @@ def build_tiny_trainer(
         scheduler = ReduceLROnPlateau(
             optimizer, factor=0.5, patience=0
         )
+    criterion = BCEDiceLoss()
+    task = SegmentationTask(criterion=criterion)
     return Trainer(
         model=model,
-        criterion=BCEDiceLoss(),
+        task=task,
+        task_config={
+            "name": "segmentation",
+            "threshold": 0.5,
+            "boundary_tolerance": 2.0,
+        },
         optimizer=optimizer,
         scheduler=scheduler,
         train_loader=loader,
@@ -65,12 +76,133 @@ def build_tiny_trainer(
             history_path=root / "history.json",
             use_amp=False,
             log_interval=1,
+            monitor=monitor,
+            monitor_mode=monitor_mode,
         ),
         checkpoint_metadata={"model_config": model_config},
     )
 
 
+class TinyMaskDataset(Dataset):
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        mask = torch.zeros(1, 4, 4)
+        mask[:, index:index + 2, index:index + 2] = 1
+        return {"mask": mask}
+
+
+class TinyShapeModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(0.5))
+
+    def forward(self, masks):
+        return ShapeAutoencoderOutput(
+            reconstruction_logits=masks * self.scale,
+            latent=masks.mean(dim=(2, 3)),
+        )
+
+
+def build_tiny_mask_trainer(root: Path, *, epochs: int = 1) -> Trainer:
+    model = TinyShapeModel()
+    loader = DataLoader(TinyMaskDataset(), batch_size=2)
+    task = MaskReconstructionTask(criterion=torch.nn.MSELoss())
+    return Trainer(
+        model=model,
+        task=task,
+        task_config={"name": "mask_reconstruction", "threshold": 0.5},
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+        train_loader=loader,
+        val_loader=loader,
+        config=TrainerConfig(
+            epochs=epochs,
+            device="cpu",
+            last_checkpoint_path=root / "shape_last.pt",
+            best_checkpoint_path=root / "shape_best.pt",
+            history_path=root / "shape_history.json",
+            use_amp=False,
+            log_interval=1,
+            monitor="loss",
+            monitor_mode="min",
+        ),
+    )
+
+
 class TestTrainer(unittest.TestCase):
+
+    def test_same_trainer_optimizes_mask_reconstruction_with_loss_min(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            trainer = build_tiny_mask_trainer(root)
+            history = trainer.train()
+            checkpoint = torch.load(
+                root / "shape_last.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            self.assertEqual(
+                set(history[0]),
+                {"epoch", "train_loss", "val_loss", "val_dice"},
+            )
+            self.assertEqual(checkpoint["monitor_name"], "loss")
+            self.assertEqual(checkpoint["monitor_mode"], "min")
+            self.assertNotIn("best_val_dice", checkpoint)
+
+    def test_generic_loss_min_checkpoint_resumes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first = build_tiny_mask_trainer(root, epochs=1)
+            first.train()
+            resumed = build_tiny_mask_trainer(root, epochs=2)
+            self.assertEqual(resumed.resume(root / "shape_last.pt"), 1)
+            history = resumed.train()
+            self.assertEqual([entry["epoch"] for entry in history], [1, 2])
+            self.assertIsNotNone(resumed.best_monitor_value)
+
+    def test_legacy_v2_resume_requires_dice_max(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            build_tiny_trainer(root, with_validation=True).train()
+            checkpoint_path = root / "unet_last.pt"
+            checkpoint = torch.load(
+                checkpoint_path,
+                map_location="cpu",
+                weights_only=False,
+            )
+            for key in ("monitor_name", "monitor_mode", "best_monitor_value"):
+                checkpoint.pop(key)
+            torch.save(checkpoint, checkpoint_path)
+
+            compatible = build_tiny_trainer(root, with_validation=True, epochs=2)
+            self.assertEqual(compatible.resume(checkpoint_path), 1)
+            incompatible = build_tiny_trainer(
+                root,
+                with_validation=True,
+                epochs=2,
+                monitor="loss",
+                monitor_mode="min",
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                incompatible.resume(checkpoint_path)
+
+    def test_missing_monitor_metric_raises_after_validation(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            trainer = build_tiny_trainer(
+                Path(temporary_directory),
+                with_validation=True,
+                monitor="does_not_exist",
+            )
+            with self.assertRaisesRegex(ValueError, "was not returned"):
+                trainer.train()
+
+    def test_trainer_config_rejects_invalid_monitoring(self):
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            TrainerConfig(monitor="")
+        with self.assertRaisesRegex(ValueError, "monitor_mode"):
+            TrainerConfig(monitor_mode="sideways")
+
     def test_train_validate_and_save_best_last_history(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -87,13 +219,30 @@ class TestTrainer(unittest.TestCase):
             self.assertEqual(len(history), 1)
             self.assertEqual(
                 set(history[0]),
-                {"epoch", "train_loss", "val_loss", "val_dice", "val_iou"},
+                {
+                    "epoch",
+                    "train_loss",
+                    "val_loss",
+                    "val_dice",
+                    "val_iou",
+                    "val_hd95",
+                    "val_assd",
+                    "val_boundary_f1",
+                },
             )
             self.assertEqual(last_checkpoint["format_version"], 2)
             self.assertEqual(best_checkpoint["model_class"], "UNetModel")
             self.assertIn("optimizer_state_dict", last_checkpoint)
             self.assertIn("scaler_state_dict", last_checkpoint)
             self.assertIn("scheduler_state_dict", last_checkpoint)
+            self.assertEqual(last_checkpoint["monitor_name"], "dice")
+            self.assertEqual(last_checkpoint["monitor_mode"], "max")
+            self.assertEqual(
+                last_checkpoint["task_config"]["name"],
+                "segmentation",
+            )
+            for key in ("metrics", "best_monitor_value", "trainer_config", "metadata"):
+                self.assertIn(key, last_checkpoint)
             self.assertEqual(
                 best_checkpoint["best_val_dice"],
                 max(entry["val_dice"] for entry in history),
@@ -106,9 +255,7 @@ class TestTrainer(unittest.TestCase):
 
             self.assertTrue((root / "unet_last.pt").is_file())
             self.assertFalse((root / "unet_best.pt").exists())
-            self.assertIsNone(history[0]["val_loss"])
-            self.assertIsNone(history[0]["val_dice"])
-            self.assertIsNone(history[0]["val_iou"])
+            self.assertEqual(set(history[0]), {"epoch", "train_loss"})
 
     def test_resume_restores_state_and_appends_history(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -136,8 +283,8 @@ class TestTrainer(unittest.TestCase):
             self.assertEqual(resumed_checkpoint["epoch"], 2)
             self.assertIsNotNone(resumed_checkpoint["scheduler_state_dict"])
             self.assertGreaterEqual(
-                resumed_checkpoint["best_val_dice"],
-                first_checkpoint["best_val_dice"],
+                resumed_checkpoint["best_monitor_value"],
+                first_checkpoint["best_monitor_value"],
             )
 
 

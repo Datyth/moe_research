@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,8 @@ from src.engine import (
     evaluate,
 )
 from src.models import SegmentationOutput, build_model
-from scripts.evaluation.evaluate import _build_boundary_overlay
+from src.tasks import SegmentationTask, TaskStepOutput
+from scripts.evaluation.evaluate import _build_boundary_overlay, _checkpoint_configs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -80,7 +82,150 @@ def logits_from_masks(masks: torch.Tensor) -> torch.Tensor:
     return torch.where(masks, torch.tensor(20.0), torch.tensor(-20.0)).float()
 
 
+
+class PassthroughModel(nn.Module):
+    def forward(self, value):
+        return value
+
+
+class ContractTask:
+    def __init__(self, error=None):
+        self.criterion = nn.MSELoss()
+        self.error = error
+
+    def evaluation_step(self, model, batch, device):
+        if self.error is not None:
+            raise self.error
+        return batch
+
+
+class SequenceLoader:
+    def __init__(self, batches, *, reported_length=None):
+        self.batches = batches
+        self.reported_length = (
+            len(batches) if reported_length is None else reported_length
+        )
+
+    def __len__(self):
+        return self.reported_length
+
+    def __iter__(self):
+        return iter(self.batches)
+
+
 class TestBinaryEvaluator(unittest.TestCase):
+    def test_generic_evaluator_sample_weights_uneven_batches(self):
+        loader = SequenceLoader([
+            TaskStepOutput(torch.tensor(1.0), {"score": 10.0}, 2),
+            TaskStepOutput(torch.tensor(2.0), {"score": 20.0}, 2),
+            TaskStepOutput(torch.tensor(3.0), {"score": 30.0}, 1),
+        ])
+        metrics = evaluate(
+            model=PassthroughModel(),
+            loader=loader,
+            task=ContractTask(),
+            device="cpu",
+        )
+        self.assertAlmostEqual(metrics["loss"], 9.0 / 5.0)
+        self.assertAlmostEqual(metrics["score"], 90.0 / 5.0)
+
+    def test_generic_evaluator_rejects_invalid_step_outputs(self):
+        invalid_steps = (
+            TaskStepOutput(torch.ones(2), {}, 2),
+            TaskStepOutput(torch.tensor(float("nan")), {}, 1),
+            TaskStepOutput(torch.tensor(1.0), {"loss": 1.0}, 1),
+            TaskStepOutput(torch.tensor(1.0), {"score": torch.ones(2)}, 2),
+            TaskStepOutput(torch.tensor(1.0), {"score": float("inf")}, 1),
+            TaskStepOutput(torch.tensor(1.0), {}, 0),
+        )
+        for step in invalid_steps:
+            with self.subTest(step=step):
+                with self.assertRaises((TypeError, ValueError, FloatingPointError)):
+                    evaluate(
+                        model=PassthroughModel(),
+                        loader=SequenceLoader([step]),
+                        task=ContractTask(),
+                        device="cpu",
+                    )
+
+    def test_generic_evaluator_rejects_changing_metric_keys(self):
+        loader = SequenceLoader([
+            TaskStepOutput(torch.tensor(1.0), {"dice": 1.0}, 1),
+            TaskStepOutput(torch.tensor(1.0), {"dice": 1.0, "iou": 1.0}, 1),
+        ])
+        with self.assertRaisesRegex(ValueError, "metric keys changed"):
+            evaluate(
+                model=PassthroughModel(),
+                loader=loader,
+                task=ContractTask(),
+                device="cpu",
+            )
+
+    def test_generic_evaluator_rejects_empty_and_zero_sample_loaders(self):
+        with self.assertRaisesRegex(ValueError, "at least one batch"):
+            evaluate(
+                model=PassthroughModel(),
+                loader=SequenceLoader([]),
+                task=ContractTask(),
+                device="cpu",
+            )
+        with self.assertRaisesRegex(ValueError, "zero samples"):
+            evaluate(
+                model=PassthroughModel(),
+                loader=SequenceLoader([], reported_length=1),
+                task=ContractTask(),
+                device="cpu",
+            )
+
+    def test_generic_evaluator_restores_eval_mode_and_after_exception(self):
+        model = PassthroughModel()
+        model.eval()
+        evaluate(
+            model=model,
+            loader=SequenceLoader([TaskStepOutput(torch.tensor(1.0), {}, 1)]),
+            task=ContractTask(),
+            device="cpu",
+        )
+        self.assertFalse(model.training)
+
+        model.train()
+        with self.assertRaisesRegex(RuntimeError, "task failed"):
+            evaluate(
+                model=model,
+                loader=SequenceLoader([object()]),
+                task=ContractTask(RuntimeError("task failed")),
+                device="cpu",
+            )
+        self.assertTrue(model.training)
+
+    def test_checkpoint_task_setting_precedence(self):
+        args = SimpleNamespace(
+            base_channels=None,
+            image_size=None,
+            threshold=None,
+            boundary_tolerance=None,
+        )
+        checkpoint = {
+            "task_config": {"threshold": 0.7, "boundary_tolerance": 5},
+            "trainer_config": {
+                "prediction_threshold": 0.2,
+                "boundary_tolerance": 1,
+            },
+        }
+        *_, threshold, tolerance = _checkpoint_configs(checkpoint, args)
+        self.assertEqual((threshold, tolerance), (0.7, 5.0))
+
+        args.threshold = 0.8
+        args.boundary_tolerance = 6
+        *_, threshold, tolerance = _checkpoint_configs(checkpoint, args)
+        self.assertEqual((threshold, tolerance), (0.8, 6.0))
+
+        args.threshold = None
+        args.boundary_tolerance = None
+        checkpoint.pop("task_config")
+        *_, threshold, tolerance = _checkpoint_configs(checkpoint, args)
+        self.assertEqual((threshold, tolerance), (0.2, 1.0))
+
     def test_boundary_overlay_uses_distinct_gt_prediction_and_shared_colors(self):
         image = np.zeros((7, 7, 3), dtype=np.float32)
         ground_truth = np.zeros((7, 7), dtype=np.float32)
@@ -220,9 +365,11 @@ class TestBinaryEvaluator(unittest.TestCase):
         metrics = evaluate(
             model=OutputModel(),
             loader=loader,
-            criterion=nn.MSELoss(),
+            task=SegmentationTask(
+                criterion=nn.MSELoss(),
+                boundary_tolerance=2,
+            ),
             device="cpu",
-            boundary_tolerance=2,
         )
         stacked_logits = logits_from_masks(torch.stack(predictions).unsqueeze(1))
         stacked_targets = torch.stack(targets).unsqueeze(1)
@@ -268,7 +415,7 @@ class TestBinaryEvaluator(unittest.TestCase):
         metrics = evaluate(
             model=model,
             loader=loader,
-            criterion=nn.MSELoss(),
+            task=SegmentationTask(criterion=nn.MSELoss()),
             device="cpu",
         )
         self.assertAlmostEqual(metrics["loss"], 5.0 / 3.0, places=6)
@@ -282,7 +429,7 @@ class TestBinaryEvaluator(unittest.TestCase):
             evaluate(
                 model=TensorModel(),
                 loader=loader,
-                criterion=nn.MSELoss(),
+                task=SegmentationTask(criterion=nn.MSELoss()),
                 device="cpu",
             )
 
