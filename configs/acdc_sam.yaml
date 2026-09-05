@@ -1,0 +1,14 @@
+# Promptless SAM baseline on ACDC: plain ViT-B encoder and a trainable
+# four-class mask decoder, with no Adapter, MoE, LPEG, or external prompts.
+extends: acdc_common.yaml
+
+experiment:
+  name: acdc_sam
+  output_root: runs
+
+model:
+  name: sam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  freeze_image_encoder: true
+  freeze_prompt_encoder: true

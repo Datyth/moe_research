@@ -59,6 +59,7 @@ class EsamModel(BaseSegmentationModel):
             moe_num_experts=moe_num_experts,
             use_moe=use_moe,
             use_lpeg=use_lpeg,
+            use_adapters=True,
         )
 
         if freeze_backbone:

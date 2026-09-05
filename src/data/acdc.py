@@ -99,7 +99,10 @@ class ACDCDataset(BaseSegmentationDataset):
 
         mask = self._load_mask(mask_path, height = height, width = width)
         image, mask = self.transform(image, mask)
-        mask = mask.long()
+        # Multiclass targets are class indices with shape [H, W] per sample
+        # ([B, H, W] batched) — the contract shared with src.metrics.multiclass
+        # and the `ce_dice` loss, and what src/data/ct_slice.py returns.
+        mask = mask.round().long().squeeze(0)
 
         return {
             "image": image,

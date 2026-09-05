@@ -1,0 +1,18 @@
+# E3: Full MoE-SAM — SAM + Adapter + MoE-FEB + LPEG (paper's best model) on
+# Synapse/BTCV CT. Same ablation row as isic2018_e3.yaml / acdc_e3.yaml /
+# amos22_e3.yaml — only the dataset block (via synapse_common.yaml) differs.
+extends: synapse_common.yaml
+
+experiment:
+  name: synapse_e3
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: true
+  use_lpeg: true
+  moe_num_experts: 4
+  moe_top_k_ratio: 0.5
+  freeze_backbone: true

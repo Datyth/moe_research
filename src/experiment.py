@@ -155,8 +155,13 @@ def build_optimizer(
     optimizer_config = config["optimizer"]
     if optimizer_config["name"] != "adamw":
         raise ValueError("Only optimizer.name='adamw' is supported.")
+    trainable_parameters = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    ]
+    if not trainable_parameters:
+        raise ValueError("Model has no trainable parameters.")
     return torch.optim.AdamW(
-        model.parameters(),
+        trainable_parameters,
         lr=float(optimizer_config["lr"]),
         weight_decay=float(optimizer_config["weight_decay"]),
     )

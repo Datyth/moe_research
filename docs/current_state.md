@@ -15,7 +15,7 @@ Batch:
   image [B, 3, 256, 256]
   mask  [B, 1, 256, 256]
   ↓
-UNet or E-SAM
+UNet, promptless SAM, or E-SAM
   ↓
 SegmentationOutput.logits [B, 1, 256, 256]
   ↓
@@ -41,7 +41,14 @@ Test metrics → test_metrics.json
 
 ### 2. Dataset path
 
-The frozen manifest contains:
+The native 8-organ Synapse CT dataset is additionally described by
+`manifests/synapse_ct_v1.json`: 1,280 audited NPZ training slices from 18
+cases and 12 held-out HDF5 volumes. `SynapseCTDataset` expands HDF5 volumes
+into 2D slices at evaluation time. Its `val.txt` is used for both validation
+and final evaluation because no separate validation cohort exists; final
+metrics therefore are not independent of checkpoint selection.
+
+The frozen ISIC manifest contains:
 
 - Training: 2,075 samples
 - Validation: 519 samples
@@ -64,12 +71,26 @@ mask thresholding at 0.5
 
 The returned dictionary contains `image`, `mask`, `sample_id`, `image_path`, and `mask_path`. Transform behavior is defined in [transforms.py](/home/teama/projects/project_01/long/moe_research/src/data/transforms.py:44).
 
-### 3. E-SAM/MoE model path
+### 3. SAM-family model paths
 
-The current experiments are:
+The adapter-free promptless baseline is registered as `sam` and configured by
+`acdc_sam.yaml`, `amos22_sam.yaml`, `isic2018_sam.yaml`, and
+`synapse_sam.yaml`. It uses plain checkpoint-compatible SAM ViT blocks, no
+Adapter/MoE/LPEG modules, an empty sparse prompt, and the learned
+`no_mask_embed` dense prompt. By default the image and prompt encoders are
+frozen and only the task-specific decoder is optimized. The decoder emits one
+binary channel or exactly `dataset.num_classes` multiclass channels, so this is
+a supervised promptless SAM baseline rather than the original prompted
+zero-shot SAM interface.
 
-- [E0](/home/teama/projects/project_01/long/moe_research/configs/isic2018_e0.yaml:8): SAM + Adapters, `use_moe: false`.
-- [E1](/home/teama/projects/project_01/long/moe_research/configs/isic2018_e1.yaml:8): SAM + Adapters + four-expert sparse MoE, selecting 50% of tokens per expert.
+The E-SAM experiments are the E0..E3 ablation rows of paper Table 2, one set per prepared dataset (`acdc`, `amos22`, `isic2018`, `synapse`), plus a `<dataset>_smoke.yaml` per dataset:
+
+- `*_e0`: SAM + Adapters, `use_moe: false`, `use_lpeg: false`.
+- `*_e1`: + four-expert sparse MoE-FEB, selecting 50% of tokens per expert.
+- `*_e2`: + LPEG only.
+- `*_e3`: full MoE-SAM (MoE-FEB + LPEG).
+
+`EsamModel` defaults both switches to `True`, so every E-SAM config states `use_moe` and `use_lpeg` explicitly; `tests/test_configs.py` fails a config that omits either.
 
 The E-SAM forward path is:
 
@@ -126,7 +147,7 @@ See [evaluator.py](/home/teama/projects/project_01/long/moe_research/src/engine/
 
 ### Current blockers/risks
 
-- E0/E1 currently resolve their dataset root to `moe_research/dataset/isic2018_task1`, which is absent. The actual prepared dataset is at `/home/teama/projects/project_01/dataset/isic2018_task1`.
-- `checkpoints/sam_vit_b_01ec64.pth` is also absent, so E-SAM construction currently cannot load its configured pretrained weights.
-- The noisy MoE router samples random noise even during `model.eval()`. Consequently, E1 validation and test predictions are stochastic.
-- The only completed run presently stored is the older UNet run, with test Dice `0.86959` and IoU `0.78625`; there are no E0/E1 run artifacts yet.
+- E-SAM configs resolve their dataset root two different ways: `acdc_common.yaml` uses the absolute server path `/home/teama/projects/project_01/dataset/acdc`, while `amos22_common.yaml`, `isic2018_common.yaml` and `synapse_common.yaml` use repo-relative `dataset/<name>`. On the training machine one of the two is wrong unless `<repo>/dataset` is a symlink to the shared data root; `export ACDC_DATA_ROOT=...`-style env vars (documented in README) are the portable fix.
+- `checkpoints/sam_vit_b_01ec64.pth` is not in the repo, so promptless SAM and E-SAM cannot load their configured pretrained weights until it is downloaded on the training machine.
+- `src/metrics/__init__.py` exposes two implementations of `compute_multiclass_dice_iou`/`compute_multiclass_surface_metrics` (from `segmentation.py` and `multiclass.py`); the `segmentation.py` import wins, so classes absent from a slice are scored 1.0 instead of being excluded from the mean. See the module docstring — switching is a measurement decision.
+- The only completed run presently stored is the older UNet run, with test Dice `0.86959` and IoU `0.78625`; there are no E-SAM run artifacts yet.

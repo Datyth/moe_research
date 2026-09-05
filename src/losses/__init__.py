@@ -4,7 +4,6 @@ from .bce import BCELoss
 from .ce_dice import CEDiceLoss
 from .combined import BCEDiceLoss
 from .dice import DiceLoss
-from .multiclass_combined import CEDiceLoss
 from .multiclass_dice import MulticlassDiceLoss
 from .registry import LOSS_REGISTRY, build_loss, register_loss
 

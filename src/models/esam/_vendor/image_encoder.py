@@ -1,8 +1,9 @@
 # Vendored from https://github.com/Asphyxiate-Rye/E-SAM
 # segment_anything_ESAM/modeling/image_encoder.py. Dropped: dead
 # `model.MFEblock` import (module doesn't exist upstream), unused
-# `AttentionFusion`/`Block`/`__main__` demo. Imports point at vendored
-# `.common`/`.adapter`.
+# `AttentionFusion`/`__main__` demo. Imports point at vendored
+# `.common`/`.adapter`. The original adapter-free SAM `Block` is retained for
+# the promptless SAM baseline; E-SAM selects `AdapterBlock`.
 #
 # BUG FIXES (upstream's `forward()` never called `patch_embed`/`pos_embed`,
 # and had `return x, output` indented inside the block loop — both together
@@ -40,6 +41,7 @@ class ImageEncoderViT(nn.Module):
             rel_pos_zero_init: bool = True,
             window_size: int = 0,
             global_attn_indexes: Tuple[int, ...] = (),
+            use_adapters: bool = True,
     ) -> None:
         """
         Args:
@@ -58,6 +60,8 @@ class ImageEncoderViT(nn.Module):
             rel_pos_zero_init (bool): If True, zero initialize relative positional parameters.
             window_size (int): Window size for window attention blocks.
             global_attn_indexes (list): Indexes for blocks using global attention.
+            use_adapters (bool): Build E-SAM Adapter blocks when true, or
+                checkpoint-compatible vanilla SAM blocks when false.
         """
         super().__init__()
         self.img_size = img_size
@@ -79,22 +83,27 @@ class ImageEncoderViT(nn.Module):
                 torch.zeros(1, img_size // patch_size, img_size // patch_size, embed_dim)
             )
 
+        self.use_adapters = use_adapters
         self.blocks = nn.ModuleList()
         for i in range(depth):
-            block_adapter = AdapterBlock(
-                    args=args,
-                    dim=embed_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    norm_layer=norm_layer,
-                    act_layer=act_layer,
-                    use_rel_pos=use_rel_pos,
-                    rel_pos_zero_init=rel_pos_zero_init,
-                    window_size=window_size if i not in global_attn_indexes else 0,
-                    input_size=(img_size // patch_size, img_size // patch_size),
+            block_kwargs = {
+                "dim": embed_dim,
+                "num_heads": num_heads,
+                "mlp_ratio": mlp_ratio,
+                "qkv_bias": qkv_bias,
+                "norm_layer": norm_layer,
+                "act_layer": act_layer,
+                "use_rel_pos": use_rel_pos,
+                "rel_pos_zero_init": rel_pos_zero_init,
+                "window_size": window_size if i not in global_attn_indexes else 0,
+                "input_size": (img_size // patch_size, img_size // patch_size),
+            }
+            block = (
+                AdapterBlock(args=args, **block_kwargs)
+                if use_adapters
+                else Block(**block_kwargs)
             )
-            self.blocks.append(block_adapter)
+            self.blocks.append(block)
 
         self.neck = nn.Sequential(
             nn.Conv2d(
@@ -126,6 +135,58 @@ class ImageEncoderViT(nn.Module):
 
         x = self.neck(x.permute(0, 3, 1, 2))
         return x, output
+
+
+class Block(nn.Module):
+    """Original SAM transformer block without parameter-efficient adapters."""
+
+    def __init__(
+            self,
+            dim: int,
+            num_heads: int,
+            mlp_ratio: float = 4.0,
+            qkv_bias: bool = True,
+            norm_layer: Type[nn.Module] = nn.LayerNorm,
+            act_layer: Type[nn.Module] = nn.GELU,
+            use_rel_pos: bool = False,
+            rel_pos_zero_init: bool = True,
+            window_size: int = 0,
+            input_size: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = Attention(
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            use_rel_pos=use_rel_pos,
+            rel_pos_zero_init=rel_pos_zero_init,
+            input_size=input_size if window_size == 0 else (window_size, window_size),
+        )
+        self.norm2 = norm_layer(dim)
+        self.mlp = MLPBlock(
+            embedding_dim=dim,
+            mlp_dim=int(dim * mlp_ratio),
+            act=act_layer,
+        )
+        self.window_size = window_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shortcut = x
+        if self.window_size > 0:
+            height, width = x.shape[1], x.shape[2]
+            x, pad_hw = window_partition(x, self.window_size)
+
+        x = self.attn(self.norm1(x))
+
+        if self.window_size > 0:
+            x = window_unpartition(
+                x, self.window_size, pad_hw, (height, width)
+            )
+
+        x = shortcut + x
+        x = x + self.mlp(self.norm2(x))
+        return x
 
 
 class AdapterBlock(nn.Module):

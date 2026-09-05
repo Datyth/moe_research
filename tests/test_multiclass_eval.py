@@ -71,6 +71,31 @@ class TestMulticlassMetrics(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_multiclass_dice_iou(logits, labels)
 
+    def test_both_multiclass_target_ranks_are_accepted(self):
+        """Datasets emit `[B, H, W]`; `[B, 1, H, W]` stays accepted.
+
+        src/data/ct_slice.py and src/data/acdc.py return one channel index map
+        per sample, so the batched multiclass target is [B, H, W]. The metrics
+        used to reject exactly that shape.
+        """
+        logits, labels_4d = _make_logits_and_labels()
+        labels_3d = labels_4d.squeeze(1)
+
+        dice_3d, iou_3d = compute_multiclass_dice_iou(logits, labels_3d)
+        dice_4d, iou_4d = compute_multiclass_dice_iou(logits, labels_4d)
+        self.assertTrue(torch.allclose(dice_3d, dice_4d))
+        self.assertTrue(torch.allclose(iou_3d, iou_4d))
+
+        surface_3d = compute_multiclass_surface_metrics(logits, labels_3d)
+        surface_4d = compute_multiclass_surface_metrics(logits, labels_4d)
+        for three, four in zip(surface_3d, surface_4d):
+            self.assertTrue(torch.allclose(three, four))
+
+    def test_wrong_target_spatial_size_rejected(self):
+        logits, labels = _make_logits_and_labels()
+        with self.assertRaisesRegex(ValueError, "must be class indices"):
+            compute_multiclass_dice_iou(logits, labels[:, :, :8, :8])
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is not available")
     def test_dice_iou_preserves_cuda_device(self):
         logits, labels = _make_logits_and_labels()
@@ -168,6 +193,9 @@ class TestEvaluatorDispatch(unittest.TestCase):
             loader=loader,
             criterion=CEDiceLoss(),
             device="cpu",
+            # `task` selects the target dtype (long class indices); it is
+            # normally taken from dataset.task by execute_experiment.
+            task="multiclass",
         )
 
         for key in ("loss", "dice", "iou", "hd", "hd95", "assd", "boundary_f1"):

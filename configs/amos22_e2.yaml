@@ -1,0 +1,15 @@
+# E2: LPEG only — SAM + Adapter + LPEG (no MoE-FEB) on AMOS22 CT.
+# Same ablation row as isic2018_e2.yaml / acdc_e2.yaml / synapse_e2.yaml.
+extends: amos22_common.yaml
+
+experiment:
+  name: amos22_e2
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: true
+  freeze_backbone: true

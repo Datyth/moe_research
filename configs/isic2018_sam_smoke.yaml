@@ -1,0 +1,21 @@
+# One-epoch pre-flight check for the promptless, adapter-free SAM baseline.
+extends: isic2018_common.yaml
+
+experiment:
+  name: isic2018_sam_smoke
+  output_root: runs
+
+model:
+  name: sam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  freeze_image_encoder: true
+  freeze_prompt_encoder: true
+
+scheduler:
+  name: none
+
+training:
+  epochs: 1
+  num_workers: 4
+  gradient_clip_norm: null

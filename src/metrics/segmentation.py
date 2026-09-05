@@ -327,28 +327,33 @@ def _resolve_multiclass(
     logits: Tensor,
     targets: Tensor,
 ) -> tuple[Tensor, Tensor, int]:
-    """Validate multiclass inputs and return (predictions, labels, C)."""
+    """Validate multiclass inputs and return (predictions, labels, C).
 
-    if logits.shape != targets.shape and not (
-        logits.ndim == 4
-        and targets.ndim == 4
-        and targets.shape[0] == logits.shape[0]
-        and targets.shape[1] == 1
-        and targets.shape[2:] == logits.shape[2:]
+    Class-index targets arrive as `[B, H, W]` (what `src/data/ct_slice.py`,
+    `src/data/acdc.py` and `src/metrics/multiclass.py` use); a redundant
+    single-channel `[B, 1, H, W]` layout is accepted and squeezed.
+    """
+
+    if logits.ndim != 4 or logits.shape[1] <= 1:
+        raise ValueError(
+            "Multiclass metrics require logits with shape [B, C, H, W] and C > 1."
+        )
+    if targets.ndim == 4 and targets.shape[1] == 1:
+        targets = targets.squeeze(1)
+    if (
+        targets.ndim != 3
+        or targets.shape[0] != logits.shape[0]
+        or targets.shape[1:] != logits.shape[2:]
     ):
         raise ValueError(
             "targets must be class indices with shape [B, H, W] or [B, 1, H, W] "
             f"matching logits spatial size, got {tuple(targets.shape)} and "
             f"{tuple(logits.shape)}."
         )
-    if logits.ndim != 4 or logits.shape[1] <= 1:
-        raise ValueError(
-            "Multiclass metrics require logits with shape [B, C, H, W] and C > 1."
-        )
 
     num_classes = int(logits.shape[1])
     predictions = logits.argmax(dim=1)
-    labels = targets.reshape(targets.shape[0], *targets.shape[2:]).long()
+    labels = targets.long()
     if labels.shape != predictions.shape:
         raise ValueError(
             f"targets shape {tuple(labels.shape)} does not match prediction "

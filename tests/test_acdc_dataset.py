@@ -104,7 +104,7 @@ class TestACDCDataset(unittest.TestCase):
         sample = self._dataset("train")[0]
 
         self.assertEqual(sample["image"].shape, (3, 32, 32))
-        self.assertEqual(sample["mask"].shape, (1, 32, 32))
+        self.assertEqual(sample["mask"].shape, (32, 32))
         self.assertEqual(sample["mask"].dtype, torch.long)
         self.assertTrue(bool(torch.isin(sample["mask"], torch.tensor(self.LABEL_VALUES)).all()))
 
@@ -112,7 +112,7 @@ class TestACDCDataset(unittest.TestCase):
         loader = DataLoader(self._dataset("train"), batch_size=2, shuffle=False)
         batch = next(iter(loader))
         self.assertEqual(batch["image"].shape, (2, 3, 32, 32))
-        self.assertEqual(batch["mask"].shape, (2, 1, 32, 32))
+        self.assertEqual(batch["mask"].shape, (2, 32, 32))
 
     def test_evaluation_transform_is_deterministic(self):
         dataset = self._dataset("test")

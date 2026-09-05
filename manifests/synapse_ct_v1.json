@@ -1,0 +1,47 @@
+{
+  "labels": {
+    "0": "background",
+    "1": "aorta",
+    "2": "gallbladder",
+    "3": "left kidney",
+    "4": "right kidney",
+    "5": "liver",
+    "6": "pancreas",
+    "7": "spleen",
+    "8": "stomach"
+  },
+  "version": "synapse-ct-8organ-v1",
+  "split_metadata": {
+    "protocol": "TransUNet 18-train/12-evaluation-case split",
+    "training_slice_count": 1280,
+    "training_case_count": 18,
+    "evaluation_case_count": 12,
+    "validation_is_test": true,
+    "warning": "val.txt is reused for validation and final evaluation because this dataset has no separate validation cohort. Final metrics are not independent of checkpoint selection."
+  },
+  "training": [
+    {
+      "kind": "npz_slices",
+      "list": "lists/lists_Synapse/train.txt",
+      "data_dir": "train_npz",
+      "expected_samples": 1280,
+      "expected_cases": 18
+    }
+  ],
+  "validation": [
+    {
+      "kind": "hdf5_volumes",
+      "list": "lists/lists_Synapse/val.txt",
+      "data_dir": "test_vol_h5",
+      "expected_cases": 12
+    }
+  ],
+  "test": [
+    {
+      "kind": "hdf5_volumes",
+      "list": "lists/lists_Synapse/val.txt",
+      "data_dir": "test_vol_h5",
+      "expected_cases": 12
+    }
+  ]
+}

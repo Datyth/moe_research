@@ -36,16 +36,7 @@ class SegmentationTransform:
         ):
             if not 0.0 <= probability <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1].")
-        if rotation_degrees < 0.0:
-            raise ValueError("rotation_degrees must be non-negative.")
-        if scale_range is not None:
-            low, high = scale_range
-            if not 0.0 < low <= high:
-                raise ValueError("scale_range must satisfy 0 < low <= high.")
-        if intensity_jitter < 0.0:
-            raise ValueError("intensity_jitter must be non-negative.")
-
-        if rotation_range < 0:
+        if rotation_range < 0.0:
             raise ValueError("rotation_range must be non-negative.")
         if len(scaling_range) != 2 or not 0 < scaling_range[0] <= scaling_range[1]:
             raise ValueError(
@@ -157,14 +148,18 @@ class SegmentationTransform:
 # scaling, and intensity shifting" augmentation protocol. Scoped to the
 # dataset the protocol is being aligned against (Synapse/BTCV) rather than
 # applied everywhere, so ISIC2018/AMOS22 training is unaffected.
-_ROTATION_SCALE_INTENSITY_DATASETS = {"synapse_btcv"}
+_ROTATION_SCALE_INTENSITY_DATASETS = {"synapse_btcv", "synapse_ct"}
 
 
 def build_segmentation_transform(config: DatasetConfig, split: str) -> SegmentationTransform:
     """Build deterministic evaluation and augmented training transforms."""
 
     extra_augmentation = (
-        {"rotation_degrees": 15.0, "scale_range": (0.9, 1.1), "intensity_jitter": 0.1}
+        {
+            "rotation_range": 15.0,
+            "scaling_range": (0.9, 1.1),
+            "intensity_shift_range": 0.1,
+        }
         if config.name in _ROTATION_SCALE_INTENSITY_DATASETS
         else {}
     )

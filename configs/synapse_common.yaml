@@ -14,7 +14,7 @@ seed: 42
 
 dataset:
   name: synapse_btcv
-  root: dataset/synapse_btcv
+  root: /home/teama/projects/project_01/dataset/synapse_btcv
   manifest: manifests/synapse_btcv_v2.json
   version: synapse-btcv-v2
   task: multiclass
@@ -25,10 +25,12 @@ dataset:
   image_std: [0.229, 0.224, 0.225]
 
 loss:
+  # `ce_dice` combines cross-entropy with soft Dice over the foreground
+  # classes only (background excluded), matching the foreground-only
+  # class-mean metrics the evaluator reports.
   name: ce_dice
   ce_weight: 0.5
   dice_weight: 0.5
-  ignore_background: false
 
 optimizer:
   name: adamw
@@ -36,9 +38,11 @@ optimizer:
   weight_decay: 0.1
 
 scheduler:
-  name: cosine_warmup
-  eta_min: 0.0
-  warmup_epochs: 5
+  # Paper recipe: 250-iteration linear warmup + polynomial (0.9) decay, stepped
+  # per optimizer step. `cosine_warmup` is not a supported scheduler name.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
 
 training:
   epochs: 50

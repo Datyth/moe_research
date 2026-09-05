@@ -194,6 +194,28 @@ class TestExperimentFramework(unittest.TestCase):
                 ReduceLROnPlateau,
             )
 
+    def test_optimizer_tracks_only_trainable_parameters(self):
+        model = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.Linear(2, 1))
+        model[0].requires_grad_(False)
+        config = {
+            "optimizer": {
+                "name": "adamw",
+                "lr": 0.001,
+                "weight_decay": 0.0,
+            }
+        }
+
+        optimizer = build_optimizer(config, model)
+        optimized = {
+            id(parameter)
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        self.assertEqual(
+            optimized,
+            {id(parameter) for parameter in model[1].parameters()},
+        )
+
     def test_invalid_config_and_unknown_loss_are_clear(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

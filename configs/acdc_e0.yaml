@@ -1,0 +1,16 @@
+# E0: Baseline — SAM + Adapter only (no MoE-FEB, no LPEG) on ACDC.
+# Same ablation row as isic2018_e0.yaml / amos22_e0.yaml / synapse_e0.yaml.
+# `use_lpeg` is stated explicitly: EsamModel defaults it to True.
+extends: acdc_common.yaml
+
+experiment:
+  name: acdc_e0
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: false
+  freeze_backbone: true

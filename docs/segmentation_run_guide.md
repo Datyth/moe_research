@@ -103,6 +103,56 @@ model:
 
 Ví dụ thật trong repo: [`configs/isic2018_common.yaml`](../configs/isic2018_common.yaml) là base cho [`isic2018_e0.yaml`](../configs/isic2018_e0.yaml), [`isic2018_e1.yaml`](../configs/isic2018_e1.yaml) và [`isic2018_smoke.yaml`](../configs/isic2018_smoke.yaml) (file này còn override thêm `scheduler`/`training` cho 1 epoch chạy nhanh).
 
+#### Ma trận config E-SAM theo dataset
+
+Mỗi dataset đã chuẩn bị xong có đúng 4 hàng ablation (theo Table 2 của MoE-SAM) cộng thêm 1 config smoke, đặt tên `<dataset>_e0..e3.yaml` và `<dataset>_smoke.yaml`, tất cả `extends` file `<dataset>_common.yaml` của chính nó:
+
+| Hàng | `use_moe` | `use_lpeg` | ACDC | AMOS22 CT | ISIC 2018 | Synapse/BTCV |
+|---|---|---|---|---|---|---|
+| E0 — SAM + Adapter | `false` | `false` | `acdc_e0` | `amos22_e0` | `isic2018_e0` | `synapse_e0` |
+| E1 — + MoE-FEB | `true` | `false` | `acdc_e1` | `amos22_e1` | `isic2018_e1` | `synapse_e1` |
+| E2 — + LPEG | `false` | `true` | `acdc_e2` | `amos22_e2` | `isic2018_e2` | `synapse_e2` |
+| E3 — MoE-SAM đầy đủ | `true` | `true` | `acdc_e3` | `amos22_e3` | `isic2018_e3` | `synapse_e3` |
+
+Hai quy tắc giữ bảng so sánh được:
+
+- `EsamModel` mặc định `use_moe=True` và `use_lpeg=True`, nên **mọi** config E-SAM phải khai rõ cả hai key; thiếu một key là âm thầm bật thành phần không có trong tên hàng.
+- Trong cùng một dataset, 4 hàng chỉ khác block `model`; `dataset`/`loss`/`optimizer`/`scheduler`/`training`/`seed` phải giống hệt nhau (test `tests/test_configs.py` kiểm tra điều này).
+
+`acdc_e3.yaml` thay thế cho `acdc_moesam.yaml` cũ (cùng cấu hình, đổi tên cho thống nhất). Baseline UNet dùng `configs/acdc_unet.yaml` và `configs/unet.yaml`.
+
+```bash
+python scripts/run_experiment.py --config configs/acdc_e3.yaml
+python scripts/run_experiment.py --config configs/amos22_smoke.yaml   # 1 epoch sanity check
+```
+
+`tests/test_esam_ablation_matrix.py` build thật 16 model từ 16 config trên (bỏ `checkpoint`, hạ `image_size` về 64) để chắc chắn mỗi hàng đúng kiến trúc và đúng số channel theo `dataset.num_classes`.
+
+#### Baseline SAM không dùng prompt
+
+Bốn config `acdc_sam.yaml`, `amos22_sam.yaml`, `isic2018_sam.yaml` và
+`synapse_sam.yaml` đăng ký `model.name: sam`. Model này dùng block ViT-B gốc
+của SAM, không có Adapter/MoE/LPEG và không nhận point/box/mask prompt. Sparse
+prompt có shape `[B, 0, 256]`; dense prompt là embedding `no_mask_embed` đã học
+của SAM. Image encoder và prompt encoder mặc định bị freeze, còn mask decoder
+riêng theo số class của dataset được fine-tune.
+
+Vì decoder được đổi để trả đúng 1 channel binary hoặc `dataset.num_classes`
+channel semantic, tên chính xác của baseline là **promptless fine-tuned SAM**,
+không phải zero-shot SAM có prompt. Mỗi config `*_sam` giữ nguyên dataset,
+loss, optimizer, scheduler, training và seed của `*_e0`; khác biệt SAM → E0 chỉ
+là việc thêm Adapter. Chạy pre-flight và run đầy đủ bằng:
+
+```bash
+python scripts/run_experiment.py --config configs/isic2018_sam_smoke.yaml
+python scripts/run_experiment.py --config configs/isic2018_sam.yaml
+```
+
+Cần đặt checkpoint ViT-B chính thức tại
+`checkpoints/sam_vit_b_01ec64.pth`. Optimizer chỉ nhận các parameter có
+`requires_grad=True`, vì vậy không cấp phát optimizer state cho hai encoder đã
+freeze.
+
 #### Đổi loss qua YAML
 
 Chỉ thay block `loss`; các phần dataset, model và training giữ nguyên. Ba loss có sẵn:
@@ -182,8 +232,13 @@ Model trả raw logits (chưa softmax) trong cả hai trường hợp. Không g�
 Dữ liệu ảnh/mask local nằm trong `/home/teama/projects/project_01/dataset/` và không được commit. Split chính thức nằm trong:
 
 ```text
-manifests/isic2018_task1_v1.json
+manifests/acdc_v1.json             # acdc-v1            1075 / 363 / 403 slices (60/20/20 patient)
+manifests/amos22_ct_v1.json        # amos22-ct-v1      21288 / 4699 / 4292 slices (210/45/45 case)
+manifests/isic2018_task1_v1.json   # isic2018-task1-v1  2075 / 519 / 100 images
+manifests/synapse_btcv_v2.json     # synapse-btcv-v2    1542 / 242 / 394 slices (20/4/6 case)
 ```
+
+Bốn dataset này đã qua integrity audit (đọc được toàn bộ ảnh/mask, khớp kích thước, đủ class ID đã khai, không trùng/không thiếu sample, không rò rỉ patient/case giữa các split).
 
 Manifest chứa relative paths cho `training`, `validation` và `test`, cùng dataset version, split seed và validation ratio. Loader đọc trực tiếp file này; training seed không tạo hoặc thay đổi split.
 
@@ -405,7 +460,13 @@ Manifest phải là artifact versioned và tracked bởi Git; data root chỉ ch
 - Loss tương ứng là `ce_dice` (CE + soft Dice trên các foreground class), metric được evaluator tự động chuyển sang argmax per-class khi logits có nhiều hơn 1 channel.
 - Train transform áp augmentation của paper: flip ngang/dọc, rotation ±15°, scaling 0.8–1.2, intensity shift ±0.1 (xem `TRAIN_AUGMENTATION_KWARGS`).
 - Split là patient-level (không slice nào của một bệnh nhân rơi vào hai split) và được freeze trong `manifests/acdc_v1.json`; tạo bằng `scripts/data/prepare_acdc.py` hoặc `scripts/03_prepare_acdc_dataset.sh`.
-Nguồn 3D (NIfTI CT/MRI, ví dụ `amos22_ct`, `synapse_btcv`) phải cắt thành slice 2D ở bước conversion (`scripts/data/ct_conversion.py`, dùng chung cho cả hai — xem `amos22_conversion.py`/`synapse_conversion.py` cho phần label map riêng từng dataset), không load 3D trực tiếp trong Dataset — mọi model trong framework này (kể cả `esam`, dựa trên SAM) chỉ nhận ảnh 2D. Case-level split (không phải slice-level) là bắt buộc để tránh leak: slice của cùng 1 bệnh nhân không được xuất hiện ở cả train và test (xem `scripts/data/prepare_amos22.py:split_cases`, dùng lại được cho dataset CT khác). `AMOS22Dataset`/`SynapseDataset` đều kế thừa `CTSliceDataset` (`src/data/ct_slice.py`) vì format on-disk và cách đọc manifest giống hệt nhau — chỉ khác registry name.
+Nguồn 3D (NIfTI CT/MRI, ví dụ `amos22_ct`, `synapse_btcv`) thường được cắt thành slice 2D ở bước conversion (`scripts/data/ct_conversion.py`, dùng chung cho cả hai — xem `amos22_conversion.py`/`synapse_conversion.py` cho phần label map riêng từng dataset). Mọi model trong framework này (kể cả `esam`, dựa trên SAM) vẫn chỉ nhận ảnh 2D. Case-level split (không phải slice-level) là bắt buộc để tránh leak: slice của cùng 1 bệnh nhân không được xuất hiện ở cả train và test (xem `scripts/data/prepare_amos22.py:split_cases`, dùng lại được cho dataset CT khác). `AMOS22Dataset`/`SynapseDataset` đều kế thừa `CTSliceDataset` (`src/data/ct_slice.py`) vì format on-disk và cách đọc manifest giống hệt nhau — chỉ khác registry name.
+
+#### Synapse CT native NPZ/HDF5 (8 organs)
+
+`src/data/synapse_ct.py` đăng ký `synapse_ct` cho format TransUNet đã xử lý sẵn: 1.280 slice train trong `train_npz` và 12 volume đánh giá trong `test_vol_h5`. Loader đọc `train.txt` thành sample 2D; volume HDF5 từ `val.txt` được expand theo trục depth và trả từng slice 2D, nên model contract không đổi. Manifest `manifests/synapse_ct_v1.json` freeze protocol, expected count và label IDs 0–8; config chạy là `configs/synapse_ct_sam.yaml` với input 224×224 và 400 epochs.
+
+Protocol 18/12 này không có cohort validation riêng. `validation` và `test` trong manifest cùng trỏ tới `val.txt`, có cờ `split_metadata.validation_is_test: true`. Vì checkpoint tốt nhất được chọn trên cùng 12 volume dùng để báo final metrics, kết quả chỉ là evaluation-set metric, không phải independent test estimate. Không được gộp hoặc so sánh nó như test metric độc lập mà không ghi caveat này.
 
 ### Scheduler và optimizer
 

@@ -1,9 +1,9 @@
-# Full MoE-SAM on ACDC: SAM + Adapter + MoE-FEB + LPEG.
-# Mirrors configs/isic2018_e3.yaml while inheriting the ACDC multiclass recipe.
+# E1: MoE only — SAM + Adapter + MoE-FEB (no LPEG) on ACDC.
+# Same ablation row as isic2018_e1.yaml / amos22_e1.yaml / synapse_e1.yaml.
 extends: acdc_common.yaml
 
 experiment:
-  name: acdc_moesam
+  name: acdc_e1
   output_root: runs
 
 model:
@@ -11,7 +11,7 @@ model:
   image_size: 256
   checkpoint: checkpoints/sam_vit_b_01ec64.pth
   use_moe: true
-  use_lpeg: true
+  use_lpeg: false
   moe_num_experts: 4
   moe_top_k_ratio: 0.5
   freeze_backbone: true

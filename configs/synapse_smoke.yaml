@@ -1,4 +1,6 @@
-# Fast 1-epoch sanity check before a long run.
+# Fast 1-epoch sanity check before a long run. Exercises the full E3
+# architecture (MoE-FEB + LPEG); the LR scheduler is disabled so the check
+# is about the model and data path, not the schedule.
 extends: synapse_common.yaml
 
 experiment:
@@ -9,7 +11,10 @@ model:
   name: esam
   image_size: 256
   checkpoint: checkpoints/sam_vit_b_01ec64.pth
-  use_moe: false
+  use_moe: true
+  use_lpeg: true
+  moe_num_experts: 4
+  moe_top_k_ratio: 0.5
   freeze_backbone: true
 
 scheduler:

@@ -6,7 +6,7 @@ seed: 42
 
 dataset:
   name: isic2018
-  root: dataset/isic2018_task1
+  root: /home/teama/projects/project_01/dataset/isic2018_task1
   manifest: manifests/isic2018_task1_v1.json
   version: isic2018-task1-v1
   task: binary

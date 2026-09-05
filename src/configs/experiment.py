@@ -248,10 +248,7 @@ def resolve_experiment_config(
     _require_keys(scheduler, "scheduler", ("name",))
     scheduler_name = scheduler["name"]
     if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
-    if scheduler_name not in {"none", "cosine", "reduce_on_plateau", "warmup_poly"}:
         raise ValueError(
-            "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
-            "warmup_poly."
             "scheduler.name must be one of: none, cosine, reduce_on_plateau, "
             "warmup_poly."
         )
@@ -260,16 +257,6 @@ def resolve_experiment_config(
         scheduler["eta_min"] = _positive_float(
             scheduler["eta_min"], "scheduler.eta_min", allow_zero=True
         )
-    elif scheduler_name == "warmup_poly":
-        scheduler.setdefault("warmup_steps", 250)
-        scheduler.setdefault("power", 0.9)
-        scheduler["warmup_steps"] = _positive_int(
-            scheduler["warmup_steps"], "scheduler.warmup_steps", allow_zero=True
-        )
-        power = _positive_float(scheduler["power"], "scheduler.power")
-        if power > 1.0:
-            raise ValueError("scheduler.power must be in (0, 1].")
-        scheduler["power"] = power
     elif scheduler_name == "warmup_poly":
         scheduler.setdefault("warmup_steps", 250)
         scheduler.setdefault("power", 0.9)

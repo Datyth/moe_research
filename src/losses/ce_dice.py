@@ -51,9 +51,7 @@ class CEDiceLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
-        self._validate_inputs(logits, targets)
-
-        labels = targets.reshape(targets.shape[0], *targets.shape[2:]).long()
+        labels = self._validate_inputs(logits, targets)
 
         if self.ce_weight > 0:
             ce_loss = F.cross_entropy(
@@ -99,7 +97,14 @@ class CEDiceLoss(nn.Module):
         return 1.0 - dice_score.mean()
 
     @staticmethod
-    def _validate_inputs(logits: Tensor, targets: Tensor) -> None:
+    def _validate_inputs(logits: Tensor, targets: Tensor) -> Tensor:
+        """Validate the batch and return class indices as `[B, H, W]`.
+
+        `[B, H, W]` is the multiclass target contract used across this project
+        (`src/data/ct_slice.py`, `src/data/acdc.py`,
+        `src/metrics/multiclass.py`); a redundant single-channel
+        `[B, 1, H, W]` mask is accepted and squeezed.
+        """
         if logits.ndim != 4 or logits.shape[1] <= 1:
             raise ValueError(
                 "ce_dice expects multiclass logits with shape [B, C, H, W] "
@@ -108,13 +113,17 @@ class CEDiceLoss(nn.Module):
             )
         if not logits.is_floating_point():
             raise TypeError("logits must be a floating-point tensor.")
+        if targets.ndim == 4 and targets.shape[1] == 1:
+            targets = targets.squeeze(1)
         if (
-            targets.ndim != 4
+            targets.ndim != 3
             or targets.shape[0] != logits.shape[0]
-            or targets.shape[1] != 1
-            or targets.shape[2:] != logits.shape[2:]
+            or targets.shape[1:] != logits.shape[2:]
         ):
             raise ValueError(
-                "targets must be class indices with shape [B, 1, H, W] "
-                f"matching logits spatial size, got {tuple(targets.shape)}."
+                "targets must be class indices with shape [B, H, W] matching "
+                f"logits spatial size, got {tuple(targets.shape)}."
             )
+        if targets.is_floating_point():
+            raise TypeError("multiclass targets must be integer class indices.")
+        return targets.long()

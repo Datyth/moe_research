@@ -15,7 +15,7 @@
     "12": "right adrenal gland",
     "13": "left adrenal gland"
   },
-  "version": "synapse-btcv-v1",
+  "version": "synapse-btcv-v2",
   "split_metadata": {
     "seed": 42,
     "val_ratio": 0.13333333,

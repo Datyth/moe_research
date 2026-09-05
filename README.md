@@ -87,11 +87,35 @@ Converted 2D samples are stored under `dataset/acdc/` and the frozen patient-lev
 python scripts/run_experiment.py --config configs/acdc_unet.yaml
 ```
 
-The frozen train, validation, and test split is defined by:
+### Synapse CT (8 organs, native NPZ/HDF5)
+
+The audited TransUNet-style dataset at
+`/home/teama/projects/project_01/dataset/synapse_ct` contains 1,280 training
+NPZ slices from 18 cases and 12 held-out HDF5 volumes with labels 0–8. Its
+tracked descriptor is `manifests/synapse_ct_v1.json`; the loader expands
+`train.txt` into 2D training samples and each `val.txt` HDF5 volume into 2D
+evaluation slices.
+
+There is no separate validation cohort: `val.txt` is deliberately used for
+both validation/checkpoint selection and final evaluation. Consequently, the
+final metric is not an independent test estimate. Run the 224×224 promptless
+SAM configuration with:
+
+```bash
+python scripts/run_experiment.py --config configs/synapse_ct_sam.yaml
+```
+
+The frozen train, validation, and test splits are defined by:
 
 ```text
-manifests/isic2018_task1_v1.json
+manifests/acdc_v1.json             acdc-v1            1,075 / 363 / 403   slices (60/20/20 patients)
+manifests/amos22_ct_v1.json        amos22-ct-v1      21,288 / 4,699 / 4,292 slices (210/45/45 cases)
+manifests/isic2018_task1_v1.json   isic2018-task1-v1  2,075 / 519 / 100    images
+manifests/synapse_btcv_v2.json     synapse-btcv-v2    1,542 / 242 / 394   slices (20/4/6 cases)
+manifests/synapse_ct_v1.json        synapse-ct-8organ-v1  1,280 train slices / 12 shared val-test volumes (18/12 cases)
 ```
+
+All five datasets passed the full integrity audit (every image and compressed mask opens, paths resolve, image/mask sizes match, declared class IDs are exactly the ones present, no duplicate, missing, unreferenced or leaked samples).
 
 The training seed in an experiment YAML never changes this split.
 
@@ -107,6 +131,44 @@ Resume an interrupted run using the configuration saved in its run folder:
 
 ```bash
 python scripts/run_experiment.py --resume runs/unet_isic2018/<run-id>
+```
+
+### Promptless SAM baseline
+
+Each prepared dataset has an adapter-free SAM ViT-B baseline: `acdc_sam`,
+`amos22_sam`, `isic2018_sam`, and `synapse_sam`. It uses no point, box, or
+mask prompt; the sparse prompt is empty and SAM's learned `no_mask_embed` is
+the dense prompt. The pretrained image and prompt encoders are frozen while
+the dataset-specific mask decoder is trained. This is therefore a
+**promptless fine-tuned SAM** semantic-segmentation baseline, not SAM's
+original prompted zero-shot interface.
+
+```bash
+python scripts/run_experiment.py --config configs/isic2018_sam_smoke.yaml
+python scripts/run_experiment.py --config configs/isic2018_sam.yaml
+```
+
+The official ViT-B checkpoint must be available at
+`checkpoints/sam_vit_b_01ec64.pth`. The baseline configs use the same data,
+loss, optimizer, schedule, training settings, and seed as E0, so the
+comparison isolates the Adapter contribution.
+
+### E-SAM ablation configs
+
+Every prepared dataset carries the same four-row MoE-SAM ablation (paper Table 2) plus a 1-epoch sanity config, each extending its own `<dataset>_common.yaml`:
+
+| Row | `use_moe` | `use_lpeg` | ACDC | AMOS22 CT | ISIC 2018 | Synapse/BTCV |
+|---|---|---|---|---|---|---|
+| E0 — SAM + Adapter | off | off | `acdc_e0` | `amos22_e0` | `isic2018_e0` | `synapse_e0` |
+| E1 — + MoE-FEB | on | off | `acdc_e1` | `amos22_e1` | `isic2018_e1` | `synapse_e1` |
+| E2 — + LPEG | off | on | `acdc_e2` | `amos22_e2` | `isic2018_e2` | `synapse_e2` |
+| E3 — full MoE-SAM | on | on | `acdc_e3` | `amos22_e3` | `isic2018_e3` | `synapse_e3` |
+
+`acdc_e3.yaml` replaces the former `acdc_moesam.yaml` (same settings, renamed for consistency). Rows within one dataset differ only in the `model` block, so the ablation measures the components and nothing else. `tests/test_configs.py` and `tests/test_esam_ablation_matrix.py` enforce that and build all 16 models on CPU. The complete progression is promptless SAM → E0 Adapter → E1/E2 component additions → E3 full MoE-SAM.
+
+```bash
+python scripts/run_experiment.py --config configs/synapse_e3.yaml
+python scripts/run_experiment.py --config configs/acdc_smoke.yaml   # quick pre-flight check
 ```
 
 Each run is stored under `runs/<experiment>/<run-id>/`:

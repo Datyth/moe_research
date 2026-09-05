@@ -31,6 +31,7 @@ def build_sam_vit_b(
     moe_num_experts: int,
     use_moe: bool = True,
     use_lpeg: bool = True,
+    use_adapters: bool = True,
 ) -> Sam_my:
     encoder_embed_dim = 768
     encoder_depth = 12
@@ -56,6 +57,7 @@ def build_sam_vit_b(
             global_attn_indexes=encoder_global_attn_indexes,
             window_size=14,
             out_chans=prompt_embed_dim,
+            use_adapters=use_adapters,
         ),
         prompt_encoder=PromptEncoder(
             args=args,

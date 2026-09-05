@@ -1,0 +1,20 @@
+# Promptless SAM baseline: plain ViT-B encoder, no Adapter, MoE, LPEG, or
+# external prompts. The frozen encoders feed a trainable task-specific decoder.
+extends: isic2018_common.yaml
+
+experiment:
+  name: isic2018_sam
+  output_root: runs
+
+model:
+  name: sam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  freeze_image_encoder: true
+  freeze_prompt_encoder: true
+
+scheduler:
+  # Match the ISIC E0-E3 recipe for a controlled architecture comparison.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

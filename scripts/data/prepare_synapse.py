@@ -124,7 +124,7 @@ def main() -> None:
 
     manifest = {
         "labels": SYNAPSE_LABELS,
-        "version": "synapse-btcv-v1",
+        "version": "synapse-btcv-v2",
         "split_metadata": {
             "seed": args.seed,
             "val_ratio": args.val_ratio,

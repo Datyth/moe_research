@@ -1,10 +1,12 @@
 # Fast 1-epoch sanity check before a long run. Exercises the full E3
 # architecture (MoE-FEB + LPEG); the LR scheduler is disabled so the check
 # is about the model and data path, not the schedule.
-extends: isic2018_common.yaml
+# warmup_poly (inherited from acdc_common.yaml) also rejects
+# warmup_steps >= total_steps, which a 1-epoch run can easily hit.
+extends: acdc_common.yaml
 
 experiment:
-  name: isic2018_smoke
+  name: acdc_smoke
   output_root: runs
 
 model:
@@ -22,5 +24,6 @@ scheduler:
 
 training:
   epochs: 1
+  batch_size: 4
   num_workers: 4
   gradient_clip_norm: null

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import h5py
 import numpy as np
 import torch
 from PIL import Image
@@ -16,6 +17,7 @@ from src.data import (
     AMOS22Dataset,
     ISIC2018Dataset,
     SegmentationTransform,
+    SynapseCTDataset,
     SynapseDataset,
     build_dataset,
 )
@@ -353,6 +355,94 @@ class TestSynapseDataset(unittest.TestCase):
         self.assertEqual(sample["image"].shape, (3, 16, 16))
         self.assertEqual(sample["mask"].shape, (16, 16))
         self.assertIn(6, sample["mask"].unique().tolist())
+
+
+class TestSynapseCTDataset(unittest.TestCase):
+    """Load the native TransUNet NPZ/HDF5 layout through audited lists."""
+
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        (self.root / "lists" / "lists_Synapse").mkdir(parents=True)
+        (self.root / "train_npz").mkdir()
+        (self.root / "test_vol_h5").mkdir()
+
+        train_id = "case0005_slice000"
+        image = np.linspace(0.0, 1.0, 16 * 16, dtype=np.float32).reshape(16, 16)
+        label = np.zeros((16, 16), dtype=np.uint8)
+        label[4:12, 4:12] = 5
+        np.savez(self.root / "train_npz" / f"{train_id}.npz", image=image, label=label)
+        (self.root / "lists" / "lists_Synapse" / "train.txt").write_text(
+            f"{train_id}\n", encoding="utf-8"
+        )
+
+        volume_id = "case0001"
+        volume_image = np.stack((image, image[::-1].copy()))
+        volume_label = np.stack((label, label))
+        with h5py.File(
+            self.root / "test_vol_h5" / f"{volume_id}.npy.h5", "w"
+        ) as handle:
+            handle.create_dataset("image", data=volume_image)
+            handle.create_dataset("label", data=volume_label)
+        (self.root / "lists" / "lists_Synapse" / "val.txt").write_text(
+            f"{volume_id}\n", encoding="utf-8"
+        )
+
+        descriptor_train = {
+            "kind": "npz_slices",
+            "list": "lists/lists_Synapse/train.txt",
+            "data_dir": "train_npz",
+            "expected_samples": 1,
+            "expected_cases": 1,
+        }
+        descriptor_eval = {
+            "kind": "hdf5_volumes",
+            "list": "lists/lists_Synapse/val.txt",
+            "data_dir": "test_vol_h5",
+            "expected_cases": 1,
+        }
+        manifest = {
+            "training": [descriptor_train],
+            "validation": [descriptor_eval],
+            "test": [descriptor_eval],
+        }
+        (self.root / "manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        self.config = DatasetConfig(
+            name="synapse_ct",
+            root=self.root,
+            manifest=self.root / "manifest.json",
+            version="test-v1",
+            task="multiclass",
+            num_classes=9,
+            image_size=(16, 16),
+        )
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def test_npz_training_slice_contract(self):
+        dataset = build_dataset(self.config, split="train")
+        sample = dataset[0]
+
+        self.assertIsInstance(dataset, SynapseCTDataset)
+        self.assertEqual(len(dataset), 1)
+        self.assertEqual(tuple(sample["image"].shape), (3, 16, 16))
+        self.assertEqual(tuple(sample["mask"].shape), (16, 16))
+        self.assertEqual(sample["mask"].dtype, torch.long)
+        self.assertEqual(sample["sample_id"], "case0005_slice000")
+        self.assertIn(5, sample["mask"].unique().tolist())
+
+    def test_hdf5_volume_expands_to_2d_evaluation_slices(self):
+        validation = build_dataset(self.config, split="val")
+        test = build_dataset(self.config, split="test")
+
+        self.assertEqual(len(validation), 2)
+        self.assertEqual(len(test), 2)
+        self.assertEqual(validation[1]["sample_id"], "case0001_slice0001")
+        self.assertEqual(tuple(validation[1]["image"].shape), (3, 16, 16))
+        self.assertEqual(tuple(validation[1]["mask"].shape), (16, 16))
 
 
 class TestSynapseConversion(unittest.TestCase):

@@ -1,0 +1,58 @@
+# Promptless SAM ViT-B on the 8-organ Synapse CT/TransUNet protocol.
+# The audited split has 18 training cases (1,280 NPZ slices) and 12 held-out
+# HDF5 volumes. There is no separate validation cohort: val.txt is used for
+# both validation/checkpoint selection and final evaluation, so the reported
+# final metric is not an independent test estimate.
+
+experiment:
+  name: synapse_ct_sam
+  output_root: runs
+
+seed: 42
+
+dataset:
+  name: synapse_ct
+  root: /home/teama/projects/project_01/dataset/synapse_ct
+  manifest: manifests/synapse_ct_v1.json
+  version: synapse-ct-8organ-v1
+  task: multiclass
+  num_classes: 9
+  in_channels: 3
+  image_size: [224, 224]
+  image_mean: [0.485, 0.456, 0.406]
+  image_std: [0.229, 0.224, 0.225]
+
+model:
+  name: sam
+  image_size: 224
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  freeze_image_encoder: true
+  freeze_prompt_encoder: true
+
+loss:
+  name: ce_dice
+  ce_weight: 0.5
+  dice_weight: 0.5
+
+optimizer:
+  name: adamw
+  lr: 0.0005
+  weight_decay: 0.1
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
+
+training:
+  epochs: 400
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: true
+  amp_dtype: bfloat16
+  prediction_threshold: 0.5
+  boundary_tolerance: 2
+  log_interval: 20
+  gradient_clip_norm: 1.0
+  early_stopping_patience: null
