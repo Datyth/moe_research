@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
@@ -32,6 +33,7 @@ def build_tiny_trainer(
     with_validation: bool,
     epochs: int = 1,
     scheduler_name: str = "none",
+    early_stopping_patience: int | None = None,
 ) -> Trainer:
     model_config = {
         "name": "unet",
@@ -65,6 +67,7 @@ def build_tiny_trainer(
             history_path=root / "history.json",
             use_amp=False,
             log_interval=1,
+            early_stopping_patience=early_stopping_patience,
         ),
         checkpoint_metadata={"model_config": model_config},
     )
@@ -171,6 +174,68 @@ class TestTrainer(unittest.TestCase):
                 resumed_trainer.optimizer.param_groups[0]["lr"],
                 initial_lr * 0.5,
             )
+
+    def test_early_stopping_halts_after_patience_epochs_without_improvement(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            trainer = build_tiny_trainer(
+                root,
+                with_validation=True,
+                epochs=10,
+                early_stopping_patience=2,
+            )
+
+            # First epoch improves (establishes best_val_dice); the rest plateau,
+            # so training should stop after 2 more (patience) epochs, at epoch 3.
+            val_dice_sequence = iter([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
+
+            def fake_evaluate(**kwargs):
+                return {"loss": 0.1, "dice": next(val_dice_sequence), "iou": 0.1}
+
+            with patch("src.engine.trainer.evaluate", side_effect=fake_evaluate):
+                history = trainer.train()
+
+            self.assertEqual(len(history), 3)
+            self.assertEqual(trainer.epochs_without_improvement, 2)
+            self.assertEqual(trainer.best_val_dice, 0.5)
+
+    def test_early_stopping_disabled_by_default_runs_all_epochs(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            trainer = build_tiny_trainer(root, with_validation=True, epochs=4)
+
+            with patch(
+                "src.engine.trainer.evaluate",
+                return_value={"loss": 0.1, "dice": 0.5, "iou": 0.1},
+            ):
+                history = trainer.train()
+
+            self.assertEqual(len(history), 4)
+
+    def test_early_stopping_streak_survives_resume(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first_trainer = build_tiny_trainer(
+                root, with_validation=True, epochs=3, early_stopping_patience=5
+            )
+            val_dice_sequence = iter([0.5, 0.5, 0.5])
+            with patch(
+                "src.engine.trainer.evaluate",
+                side_effect=lambda **kwargs: {
+                    "loss": 0.1, "dice": next(val_dice_sequence), "iou": 0.1
+                },
+            ):
+                first_trainer.train()
+
+            self.assertEqual(first_trainer.epochs_without_improvement, 2)
+
+            resumed_trainer = build_tiny_trainer(
+                root, with_validation=True, epochs=4, early_stopping_patience=5
+            )
+            resumed_trainer.resume(root / "unet_last.pt")
+
+            self.assertEqual(resumed_trainer.epochs_without_improvement, 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

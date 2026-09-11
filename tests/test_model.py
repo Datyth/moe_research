@@ -132,8 +132,10 @@ class TestEsamModel(unittest.TestCase):
 
         for name, param in model.network.image_encoder.named_parameters():
             self.assertEqual(param.requires_grad, "Adapter" in name, msg=name)
-        for param in model.network.prompt_encoder.parameters():
-            self.assertFalse(param.requires_grad)
+        for name, param in model.network.prompt_encoder.named_parameters():
+            # LPEG is randomly initialized and trained; the original SAM
+            # prompt-encoder parameters stay frozen.
+            self.assertEqual(param.requires_grad, "lpeg" in name, msg=name)
 
         trainable_with_grad = [
             name

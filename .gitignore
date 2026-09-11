@@ -22,3 +22,9 @@ results/
 
 # Standardized experiment outputs
 runs/
+
+# Private configuration files
+.env
+
+# Training run logs (tmux/CLI output dumps, not tracked artifacts)
+logs/

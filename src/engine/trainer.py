@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from .evaluator import evaluate
+from .schedulers import is_per_iteration_scheduler
 from src.models import SegmentationOutput
 
 
@@ -35,14 +36,20 @@ class TrainerConfig:
     boundary_tolerance: float = 2
     use_amp: bool = True
     amp_dtype: str = "float16"
+    task: str = "binary"
     log_interval: int = 20
     gradient_clip_norm: float | None = None
+    early_stopping_patience: int | None = None
 
     def __post_init__(self) -> None:
         if self.epochs <= 0:
             raise ValueError("epochs must be positive.")
+        if self.early_stopping_patience is not None and self.early_stopping_patience <= 0:
+            raise ValueError("early_stopping_patience must be positive.")
         if self.amp_dtype not in {"float16", "bfloat16"}:
             raise ValueError("amp_dtype must be 'float16' or 'bfloat16'.")
+        if self.task not in {"binary", "multiclass"}:
+            raise ValueError("task must be 'binary' or 'multiclass'.")
         if self.log_interval <= 0:
             raise ValueError("log_interval must be positive.")
         if not 0.0 <= self.prediction_threshold <= 1.0:
@@ -81,6 +88,9 @@ class Trainer:
         self.model = model
         self.criterion = criterion
         self.scheduler = scheduler
+        # Per-iteration schedulers (e.g. WarmupPolyLR) are stepped inside the
+        # batch loop; epoch schedulers are stepped once per epoch.
+        self.step_scheduler_per_iteration = is_per_iteration_scheduler(scheduler)
         self.optimizer = optimizer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -90,6 +100,7 @@ class Trainer:
         self.start_epoch = 1
         self.history: list[HistoryEntry] = []
         self.best_val_dice: float | None = None
+        self.epochs_without_improvement = 0
 
         if self.device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(
@@ -130,6 +141,7 @@ class Trainer:
                     device=self.device,
                     threshold=self.config.prediction_threshold,
                     boundary_tolerance=self.config.boundary_tolerance,
+                    task=self.config.task,
                 )
 
             entry: HistoryEntry = {
@@ -152,19 +164,24 @@ class Trainer:
                 ),
             }
             history.append(entry)
-            self._step_scheduler(validation_metrics)
+            if not self.step_scheduler_per_iteration:
+                self._step_scheduler(validation_metrics)
 
 
             val_dice = entry["val_dice"]
-            if isinstance(val_dice, float) and (
+            improved = isinstance(val_dice, float) and (
                 self.best_val_dice is None or val_dice > self.best_val_dice
-            ):
+            )
+            if improved:
                 self.best_val_dice = val_dice
+                self.epochs_without_improvement = 0
                 self._save_checkpoint(
                     path=self.config.best_checkpoint_path,
                     epoch=epoch,
                     metrics=entry,
                 )
+            elif val_dice is not None:
+                self.epochs_without_improvement += 1
 
             self._save_checkpoint(
                 path=self.config.last_checkpoint_path,
@@ -173,6 +190,14 @@ class Trainer:
             )
             self._save_history(history)
             self._print_epoch_summary(entry)
+
+            patience = self.config.early_stopping_patience
+            if patience is not None and self.epochs_without_improvement >= patience:
+                print(
+                    f"Early stopping: no validation Dice improvement for "
+                    f"{self.epochs_without_improvement} epochs (patience={patience})."
+                )
+                break
 
         return history
     def resume(self, checkpoint_path: Path) -> int:
@@ -209,6 +234,11 @@ class Trainer:
         best_val_dice = checkpoint.get("best_val_dice")
         self.best_val_dice = (
             None if best_val_dice is None else float(best_val_dice)
+        )
+        # Older checkpoints predate early stopping; resume as "no streak yet"
+        # rather than failing, since that's the safe (never stop too early) default.
+        self.epochs_without_improvement = int(
+            checkpoint.get("epochs_without_improvement", 0)
         )
 
         history_path = Path(self.config.history_path)
@@ -281,6 +311,9 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
+            if self.step_scheduler_per_iteration:
+                self.scheduler.step()
+
             total_loss += loss.detach().item() * batch_size
             total_samples += batch_size
 
@@ -314,7 +347,7 @@ class Trainer:
         )
         targets = batch["mask"].to(
             self.device,
-            dtype=torch.float32,
+            dtype=torch.long if self.config.task == "multiclass" else torch.float32,
             non_blocking=True,
         )
         return images, targets
@@ -356,6 +389,7 @@ class Trainer:
             "val_dice": metrics["val_dice"],
             "val_iou": metrics["val_iou"],
             "best_val_dice": self.best_val_dice,
+            "epochs_without_improvement": self.epochs_without_improvement,
             "trainer_config": asdict(self.config),
             "metadata": self.checkpoint_metadata,
         }

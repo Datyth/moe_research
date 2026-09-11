@@ -1,0 +1,15 @@
+# E0: Baseline — SAM + Adapter only (no MoE-FEB, no LPEG), on Synapse/BTCV CT.
+# Same pattern as isic2018_e0.yaml/amos22_e0.yaml.
+extends: synapse_common.yaml
+
+experiment:
+  name: synapse_e0
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: false
+  freeze_backbone: true

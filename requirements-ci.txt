@@ -1,4 +1,5 @@
 matplotlib
+nibabel
 numpy
 Pillow
 PyYAML

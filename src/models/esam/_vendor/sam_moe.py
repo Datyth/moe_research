@@ -8,6 +8,16 @@
 # Added `use_moe` (not upstream): when False, skips MoE routing/fusion and
 # decodes the encoder's `image_embeddings` directly — an ablation baseline
 # with everything else identical.
+#
+# Deviations for LPEG (paper-spec):
+# - `use_lpeg` is independent of `use_moe` (Table 2 needs all four combos).
+# - Prompt encoding moved AFTER MoE-FEB enhancement: the paper says LPEG
+#   consumes the enhanced image embedding (upstream encoded prompts from the
+#   pre-MoE embedding). With `use_lpeg=False` the prompt encoder is called
+#   with `image_embedding=None`, so the sparse prompt stays empty and the
+#   dense prompt is SAM's learned `no_mask_embed` — the pre-LPEG behavior.
+# - The prompt encoder receives the true batch size explicitly; with no
+#   image embedding it would otherwise infer bs=1.
 
 from typing import Any, List, Tuple
 
@@ -36,6 +46,7 @@ class Sam_my(nn.Module):
         moe_top_k_ratio: float,
         moe_num_experts: int = 4,
         use_moe: bool = True,
+        use_lpeg: bool = True,
         pixel_mean: List[float] = [123.675, 116.28, 103.53],
         pixel_std: List[float] = [58.395, 57.12, 57.375],
     ) -> None:
@@ -56,6 +67,8 @@ class Sam_my(nn.Module):
         self.prompt_encoder = prompt_encoder
         self.mask_decoder = mask_decoder
         self.args = args
+        self.use_moe = use_moe
+        self.use_lpeg = use_lpeg
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
 
@@ -81,10 +94,6 @@ class Sam_my(nn.Module):
     def forward(self, batched_input, multimask_output, image_size, gt=None, mode='train'):
         input_images = self.preprocess(batched_input)
         image_embeddings, low_image_embeddings = self.image_encoder(input_images)
-        sparse_embeddings, dense_embeddings = self.prompt_encoder(
-                points=None, boxes=None, masks=None, image_embedding=image_embeddings
-        )
-
         indices = None
         if self.use_moe:
             embedding_moe = torch.cat(
@@ -100,6 +109,15 @@ class Sam_my(nn.Module):
             ).permute(0, 1, 4, 2, 3).contiguous()
             embedding_moe = embedding_moe.mean(1)
             image_embeddings = image_embeddings + self.neck5(embedding_moe)
+
+        # Prompt embedding is generated from the (possibly MoE-enhanced) image
+        # embedding: LPEG produces one sparse prompt token, while the dense
+        # prompt remains SAM's learned no_mask_embed.
+        sparse_embeddings, dense_embeddings = self.prompt_encoder(
+                points=None, boxes=None, masks=None,
+                image_embedding=image_embeddings if self.use_lpeg else None,
+                batch_size=batched_input.shape[0]
+        )
 
         low_res_masks, iou_predictions = self.mask_decoder(
                 image_embeddings=image_embeddings,

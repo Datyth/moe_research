@@ -368,6 +368,7 @@ def main() -> None:
         "loss": metrics["loss"],
         "dice": metrics["dice"],
         "iou": metrics["iou"],
+        "hd": metrics["hd"],
         "hd95": metrics["hd95"],
         "assd": metrics["assd"],
         "boundary_f1": metrics["boundary_f1"],
@@ -389,6 +390,7 @@ def main() -> None:
     print(f"{split_label} Loss        : {metrics['loss']:.6f}")
     print(f"{split_label} Dice        : {metrics['dice']:.6f}")
     print(f"{split_label} IoU         : {metrics['iou']:.6f}")
+    print(f"{split_label} HD          : {metrics['hd']:.6f}")
     print(f"{split_label} HD95        : {metrics['hd95']:.6f}")
     print(f"{split_label} ASSD        : {metrics['assd']:.6f}")
     print(f"{split_label} Boundary F1 : {metrics['boundary_f1']:.6f}")

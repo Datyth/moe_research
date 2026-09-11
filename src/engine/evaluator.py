@@ -10,9 +10,12 @@ from torch.utils.data import DataLoader
 
 from src.metrics import (
     compute_binary_boundary_f1,
+    compute_binary_hd,
     compute_binary_hd95_assd,
     compute_binary_surface_distances,
     compute_binary_surface_metrics,
+    compute_multiclass_dice_iou,
+    compute_multiclass_surface_metrics,
     extract_binary_surface,
 )
 from src.models import SegmentationOutput
@@ -21,6 +24,7 @@ from src.models import SegmentationOutput
 __all__ = [
     "compute_binary_boundary_f1",
     "compute_binary_dice_iou",
+    "compute_binary_hd",
     "compute_binary_hd95_assd",
     "compute_binary_surface_distances",
     "compute_binary_surface_metrics",
@@ -78,9 +82,14 @@ def evaluate(
     device: str | torch.device,
     threshold: float = 0.5,
     boundary_tolerance: float = 2,
+    task: str = "binary",
 ) -> dict[str, float]:
-    """Return sample-mean loss and binary region/surface metrics."""
+    """Return sample-mean loss, region metrics (Dice, IoU) and surface
+    metrics (HD95, ASSD, boundary F1) via src.metrics. For `task="multiclass"`,
+    all metrics are class-mean (background excluded, absent classes skipped)."""
 
+    if task not in {"binary", "multiclass"}:
+        raise ValueError("task must be 'binary' or 'multiclass'.")
     if len(loader) == 0:
         raise ValueError("loader must contain at least one batch.")
     if not 0.0 <= threshold <= 1.0:
@@ -113,10 +122,12 @@ def evaluate(
     total_loss = 0.0
     total_dice = 0.0
     total_iou = 0.0
+    total_hd = 0.0
     total_hd95 = 0.0
     total_assd = 0.0
     total_boundary_f1 = 0.0
     total_samples = 0
+    target_dtype = torch.long if task == "multiclass" else torch.float32
 
     try:
         with torch.inference_mode():
@@ -132,7 +143,7 @@ def evaluate(
                 )
                 targets = batch["mask"].to(
                     resolved_device,
-                    dtype=torch.float32,
+                    dtype=target_dtype,
                     non_blocking=True,
                 )
                 batch_size = images.shape[0]
@@ -153,21 +164,30 @@ def evaluate(
                 if not torch.isfinite(loss):
                     raise FloatingPointError("Non-finite evaluation loss detected.")
 
-                dice, iou = compute_binary_dice_iou(
-                    logits,
-                    targets,
-                    threshold=threshold,
-                )
+                if task == "multiclass":
+                    dice, iou = compute_multiclass_dice_iou(logits, targets)
+                    max_hd, hd95, assd, boundary_f1 = compute_multiclass_surface_metrics(
+                        logits,
+                        targets,
+                        boundary_tolerance=resolved_boundary_tolerance,
+                    )
+                else:
+                    dice, iou = compute_binary_dice_iou(
+                        logits,
+                        targets,
+                        threshold=threshold,
+                    )
+                    max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+                        logits,
+                        targets,
+                        threshold=threshold,
+                        boundary_tolerance=resolved_boundary_tolerance,
+                    )
                 if not torch.isfinite(dice).all() or not torch.isfinite(iou).all():
                     raise FloatingPointError("Non-finite evaluation metric detected.")
-                hd95, assd, boundary_f1 = compute_binary_surface_metrics(
-                    logits,
-                    targets,
-                    threshold=threshold,
-                    boundary_tolerance=resolved_boundary_tolerance,
-                )
                 if not (
-                    torch.isfinite(hd95).all()
+                    torch.isfinite(max_hd).all()
+                    and torch.isfinite(hd95).all()
                     and torch.isfinite(assd).all()
                     and torch.isfinite(boundary_f1).all()
                 ):
@@ -176,6 +196,7 @@ def evaluate(
                 total_loss += loss.item() * batch_size
                 total_dice += dice.sum().item()
                 total_iou += iou.sum().item()
+                total_hd += max_hd.sum().item()
                 total_hd95 += hd95.sum().item()
                 total_assd += assd.sum().item()
                 total_boundary_f1 += boundary_f1.sum().item()
@@ -190,6 +211,7 @@ def evaluate(
         "loss": total_loss / total_samples,
         "dice": total_dice / total_samples,
         "iou": total_iou / total_samples,
+        "hd": total_hd / total_samples,
         "hd95": total_hd95 / total_samples,
         "assd": total_assd / total_samples,
         "boundary_f1": total_boundary_f1 / total_samples,

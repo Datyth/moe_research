@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Dataset
 from src.engine import (
     compute_binary_boundary_f1,
     compute_binary_dice_iou,
+    compute_binary_hd,
     compute_binary_hd95_assd,
     compute_binary_surface_metrics,
     evaluate,
@@ -119,10 +120,14 @@ class TestBinaryEvaluator(unittest.TestCase):
         logits = logits_from_masks(targets.bool())
 
         dice, iou = compute_binary_dice_iou(logits, targets)
-        hd95, assd, boundary_f1 = compute_binary_surface_metrics(logits, targets)
+        max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+            logits,
+            targets,
+        )
 
         self.assertEqual(dice.item(), 1.0)
         self.assertEqual(iou.item(), 1.0)
+        self.assertEqual(max_hd.item(), 0.0)
         self.assertEqual(hd95.item(), 0.0)
         self.assertEqual(assd.item(), 0.0)
         self.assertEqual(boundary_f1.item(), 1.0)
@@ -130,11 +135,14 @@ class TestBinaryEvaluator(unittest.TestCase):
     def test_surface_metrics_handle_both_empty_and_each_one_empty_direction(self):
         targets = torch.zeros((1, 1, 5, 7))
         empty_logits = torch.full_like(targets, -20.0)
-        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+        max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
             empty_logits,
             targets,
         )
-        self.assertEqual((hd95.item(), assd.item(), boundary_f1.item()), (0, 0, 1))
+        self.assertEqual(
+            (max_hd.item(), hd95.item(), assd.item(), boundary_f1.item()),
+            (0, 0, 0, 1),
+        )
 
         nonempty = targets.clone()
         nonempty[:, :, 2, 3] = 1
@@ -144,10 +152,11 @@ class TestBinaryEvaluator(unittest.TestCase):
             (empty_logits, nonempty),
             (nonempty_logits, targets),
         ):
-            hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+            max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
                 logits,
                 ground_truth,
             )
+            self.assertAlmostEqual(max_hd.item(), diagonal)
             self.assertAlmostEqual(hd95.item(), diagonal)
             self.assertAlmostEqual(assd.item(), diagonal)
             self.assertEqual(boundary_f1.item(), 0.0)
@@ -162,6 +171,7 @@ class TestBinaryEvaluator(unittest.TestCase):
         logits = logits_from_masks(prediction)
 
         hd95, assd = compute_binary_hd95_assd(logits, target)
+        max_hd = compute_binary_hd(logits, target)
         strict_f1 = compute_binary_boundary_f1(
             logits,
             target,
@@ -175,6 +185,8 @@ class TestBinaryEvaluator(unittest.TestCase):
 
         self.assertGreater(hd95.item(), 0.0)
         self.assertGreater(assd.item(), 0.0)
+        self.assertGreater(max_hd.item(), 0.0)
+        self.assertGreaterEqual(max_hd.item(), hd95.item())
         self.assertLess(strict_f1.item(), 1.0)
         self.assertGreaterEqual(tolerant_f1.item(), strict_f1.item())
 
@@ -185,11 +197,12 @@ class TestBinaryEvaluator(unittest.TestCase):
         prediction[:, :, 3, 4] = True
         logits = logits_from_masks(prediction)
 
-        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+        max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
             logits,
             target,
             boundary_tolerance=2,
         )
+        self.assertEqual(max_hd.item(), 3.0)
         self.assertEqual(hd95.item(), 3.0)
         self.assertEqual(assd.item(), 3.0)
         self.assertEqual(boundary_f1.item(), 0.0)
@@ -226,11 +239,12 @@ class TestBinaryEvaluator(unittest.TestCase):
         )
         stacked_logits = logits_from_masks(torch.stack(predictions).unsqueeze(1))
         stacked_targets = torch.stack(targets).unsqueeze(1)
-        hd95, assd, boundary_f1 = compute_binary_surface_metrics(
+        max_hd, hd95, assd, boundary_f1 = compute_binary_surface_metrics(
             stacked_logits,
             stacked_targets,
             boundary_tolerance=2,
         )
+        self.assertAlmostEqual(metrics["hd"], max_hd.mean().item())
         self.assertAlmostEqual(metrics["hd95"], hd95.mean().item())
         self.assertAlmostEqual(metrics["assd"], assd.mean().item())
         self.assertAlmostEqual(

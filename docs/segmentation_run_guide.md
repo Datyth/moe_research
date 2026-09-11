@@ -14,7 +14,7 @@ Mỗi experiment được mô tả bởi một YAML, ví dụ [`configs/unet.yam
 - `model`: model registry name cùng tham số riêng của kiến trúc.
 - `loss`: loss registry name cùng tham số constructor.
 - `optimizer`: hiện hỗ trợ AdamW.
-- `scheduler`: `none`, `cosine` hoặc `reduce_on_plateau`.
+- `scheduler`: `none`, `cosine`, `reduce_on_plateau` hoặc `warmup_poly`.
 - `training`: epochs, batch size, workers, device, AMP và threshold.
 
 Cấu hình mẫu:
@@ -65,9 +65,12 @@ training:
   boundary_tolerance: 2
   log_interval: 20
   gradient_clip_norm: null
+  early_stopping_patience: null
 ```
 
 `training.amp_dtype` nhận `float16` (mặc định) hoặc `bfloat16`. Đổi sang `bfloat16` khi thấy `FloatingPointError: Non-finite loss detected` giữa chừng training trên GPU hỗ trợ bf16 (Ampere trở lên) — `float16` có dải số mũ hẹp (±65504) nên các kiến trúc có phép nhân không chuẩn hóa ở tầng cuối (ví dụ mask decoder kiểu SAM trong `esam`) dễ tràn số sau vài epoch dù đã bật `gradient_clip_norm`; `bfloat16` có cùng dải số mũ với `float32` nên không gặp lỗi này, đổi lại giảm độ chính xác mantissa. `GradScaler` tự động vô hiệu hoá khi dùng `bfloat16` vì loss-scaling chỉ cần thiết cho `float16`.
+
+`training.early_stopping_patience` mặc định `null` (tắt, chạy đủ `epochs`). Đặt 1 số nguyên dương để dừng sớm khi validation Dice không cải thiện sau bấy nhiêu epoch liên tiếp — hữu ích cho dataset lớn (ví dụ AMOS22, ~10x số sample so với ISIC2018) nơi chạy đủ 50 epoch tốn nhiều giờ. Streak "không cải thiện" được lưu vào checkpoint và khôi phục đúng khi resume.
 
 #### Chia sẻ hyperparameter chung giữa nhiều config bằng `extends`
 
@@ -164,7 +167,15 @@ masks  : float32 [B, 1, H, W]
 logits : float   [B, 1, H, W]
 ```
 
-Model trả raw logits. Không gọi sigmoid trước BCE, Dice hoặc BCE+Dice. Sigmoid chỉ được dùng khi tính prediction và metrics.
+Multiclass segmentation (`dataset.task: multiclass`, ví dụ `amos22_ct`, `synapse_btcv`) dùng shape:
+
+```text
+images : float32 [B, 3, H, W]
+masks  : int64   [B, H, W]        # class index, không one-hot
+logits : float   [B, num_classes, H, W]
+```
+
+Model trả raw logits (chưa softmax) trong cả hai trường hợp. Không gọi sigmoid/softmax trước loss — loss tự quyết định cách chuyển logits (BCE/Dice dùng sigmoid cho binary, `ce_dice`/`multiclass_dice` dùng softmax cho multiclass). Sigmoid/softmax chỉ được dùng khi tính prediction và metrics. Metric multiclass gồm `compute_multiclass_dice_iou` (Dice/IoU) và `compute_multiclass_surface_metrics` (HD95/ASSD/Boundary F1) — cả hai đều class-mean, bỏ qua background theo mặc định, và bỏ qua class không xuất hiện ở cả prediction lẫn target cho sample đó. `compute_multiclass_surface_metrics` coi mỗi class là một bài toán binary riêng (class đó vs phần còn lại) rồi tái dùng đúng logic surface-distance của `compute_binary_surface_metrics`, sau đó trung bình qua các class có mặt.
 
 ### Frozen dataset split
 
@@ -195,7 +206,7 @@ runs/<experiment>/<UTC timestamp>_seed-<seed>/
 - `best.pt`: epoch có validation Dice cao nhất, dùng cho final test.
 - `last.pt`: trạng thái gần nhất để resume.
 - `history.json`: train loss, validation loss, Dice và IoU theo epoch.
-- `test_metrics.json`: Loss, Dice, IoU, HD95, ASSD và Boundary F1 của
+- `test_metrics.json`: Loss, Dice, IoU, HD, HD95, ASSD và Boundary F1 của
   `best.pt` trên test.
 - `metadata.json`: seed, Git commit/dirty state, manifest hash, device, timestamps, status và config fingerprint.
 
@@ -299,26 +310,47 @@ python scripts/summarize_experiments.py \
 
 Script in bảng từng run và mean ± sample standard deviation. Chỉ các run có cùng experiment name và config fingerprint mới được group; seed và output root không thuộc fingerprint. Một run hiển thị standard deviation là `N/A`.
 
-Summary yêu cầu đủ cả sáu metric. Run cũ thiếu HD95, ASSD hoặc Boundary F1 sẽ
+Summary yêu cầu đủ cả bảy metric. Run cũ thiếu HD, HD95, ASSD hoặc Boundary F1 sẽ
 được bỏ qua với warning rõ ràng; script không gán metric thiếu thành 0.
 
 ### Ý nghĩa evaluation metrics
 
-- Dice và IoU đo độ chồng lấp vùng segmentation.
-- HD95 là percentile 95 của tập hợp hai chiều các khoảng cách gần nhất giữa
-  boundary dự đoán và boundary ground truth; đây là robust worst-case boundary
-  distance.
+- Dice và IoU đo độ chồng lấp vùng segmentation. Dice trùng với Dice Similarity
+  Coefficient (DSC) dùng trong nhiều paper.
+- HD là Hausdorff distance cổ điển: khoảng cách lớn nhất trong tập hợp hai chiều
+  các khoảng cách gần nhất giữa boundary dự đoán và boundary ground truth. HD
+  nhạy với outlier (một pixel nhiễu có thể làm HD tăng vọt).
+- HD95 là percentile 95 của cùng tập hợp khoảng cách đó; đây là robust worst-case
+  boundary distance, thường được ưu tiên hơn HD khi báo cáo.
 - ASSD là trung bình có trọng số theo số boundary pixel của cùng hai tập khoảng
   cách có hướng, thể hiện average boundary distance.
 - Boundary F1 đo precision/recall của boundary. Một boundary pixel được match khi
   khoảng cách Euclidean gần nhất tới boundary còn lại **nhỏ hơn hoặc bằng**
   `training.boundary_tolerance`; mặc định là 2 pixel.
 
-Boundary được lấy bằng `mask & ~binary_erosion(mask)`. HD95 và ASSD hiện có đơn vị
-pixel, không phải millimeter, vì pipeline ISIC 2D không cung cấp physical pixel
-spacing. Nếu cả prediction và ground truth rỗng, HD95/ASSD bằng 0 và Boundary F1
-bằng 1. Nếu chỉ một mask rỗng, Boundary F1 bằng 0; HD95 và ASSD nhận finite penalty
-theo đường chéo ảnh `sqrt((H - 1)^2 + (W - 1)^2)`.
+Boundary được lấy bằng `mask & ~binary_erosion(mask)`. HD, HD95 và ASSD hiện có
+don vị pixel, không phải millimeter, vì pipeline ISIC 2D không cung cấp physical
+pixel spacing. Nếu cả prediction và ground truth rỗng, HD/HD95/ASSD bằng 0 và
+Boundary F1 bằng 1. Nếu chỉ một mask rỗng, Boundary F1 bằng 0; HD, HD95 và ASSD
+nhận finite penalty theo đường chéo ảnh `sqrt((H - 1)^2 + (W - 1)^2)`.
+
+#### So sánh với số liệu MoE-SAM (MICCAI 2025)
+
+Các metric ở trên tính **theo từng slice 2D** rồi lấy trung bình, **không** so
+sánh trực tiếp được với Table 1 của paper. Tác giả MoE-SAM đã xác nhận qua email
+(xem [`docs/moe_sam_author_clarifications.md`](moe_sam_author_clarifications.md))
+rằng họ dựng **volume 3D** rồi chấm từng foreground class trên cả volume, dùng
+`medpy.metric.binary.dc` và `medpy.metric.binary.hd95`. Vì vậy:
+
+- Cột **"HD" trong Table 1 thực chất là HD95**, và vì `hd95` được gọi **không kèm
+  voxel spacing** nên đơn vị là **voxel trên lưới đánh giá**, không phải mm.
+- Muốn so với paper, dùng `scripts/evaluation/evaluate_volumetric.py`
+  (`src/metrics/volumetric.py` gọi đúng hai hàm medpy đó), lấy key `hd95` — không
+  phải key `hd`, và không phải số per-slice mà `evaluate()` in ra.
+- Tác giả **không dùng gradient clipping** ở cả 4 dataset. Config trong repo này
+  vẫn đặt `gradient_clip_norm: 1.0` — đây là deviation có chủ đích, vì khi bỏ
+  clipping ta quan sát được training phân kỳ (loss vọt lên trong 1 bước, val Dice
+  sụp về 0 và không hồi phục) ở nhiều hơn một dataset.
 
 Final test đã chạy tự động nhưng không tạo ảnh. Khi cần visualization:
 
@@ -383,6 +415,8 @@ Dataset mới kế thừa `BaseSegmentationDataset`, đăng ký bằng `@registe
 
 Manifest phải là artifact versioned và tracked bởi Git; data root chỉ chứa file local. Dataset class chịu trách nhiệm map `train`, `val`, `test` sang các key manifest phù hợp và báo lỗi nếu split thiếu/rỗng.
 
+Nguồn 3D (NIfTI CT/MRI, ví dụ `amos22_ct`, `synapse_btcv`) phải cắt thành slice 2D ở bước conversion (`scripts/data/ct_conversion.py`, dùng chung cho cả hai — xem `amos22_conversion.py`/`synapse_conversion.py` cho phần label map riêng từng dataset), không load 3D trực tiếp trong Dataset — mọi model trong framework này (kể cả `esam`, dựa trên SAM) chỉ nhận ảnh 2D. Case-level split (không phải slice-level) là bắt buộc để tránh leak: slice của cùng 1 bệnh nhân không được xuất hiện ở cả train và test (xem `scripts/data/prepare_amos22.py:split_cases`, dùng lại được cho dataset CT khác). `AMOS22Dataset`/`SynapseDataset` đều kế thừa `CTSliceDataset` (`src/data/ct_slice.py`) vì format on-disk và cách đọc manifest giống hệt nhau — chỉ khác registry name.
+
 ### Scheduler và optimizer
 
 Scheduler v1 cố ý chỉ có:
@@ -390,6 +424,7 @@ Scheduler v1 cố ý chỉ có:
 - `none`.
 - `cosine`: `T_max` tự lấy tổng epochs, config nhận `eta_min`.
 - `reduce_on_plateau`: luôn monitor validation loss với mode `min`, config nhận `factor`, `patience`, `min_lr`.
+- `warmup_poly`: scheduler theo iteration (công thức của MoE-SAM/E-SAM), config nhận `warmup_steps` (mặc định 250) và `power` (mặc định 0.9). Warmup tuyến tính theo số bước optimizer, sau đó suy giảm đa thức `(1 - progress)**power` đến 0 ở cuối huấn luyện; `Trainer` tự step mỗi optimizer step thay vì mỗi epoch.
 
 Optimizer v1 chỉ hỗ trợ AdamW. Chỉ mở rộng builder khi experiment thực tế cần optimizer mới; chưa cần registry hoặc callback system.
 
