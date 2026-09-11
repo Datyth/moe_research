@@ -1,0 +1,60 @@
+# Base config for AMOS22 CT (16-class abdominal organ segmentation).
+# Missing experiment/model on purpose — amos22_*.yaml extend this via
+# `extends:` (see docs/segmentation_run_guide.md).
+#
+# Optimizer/scheduler match synapse_common.yaml's alignment to MoE-SAM
+# (MICCAI 2025)'s released training recipe (AdamW lr=5e-4, weight_decay=0.1,
+# warmup_poly scheduler) for consistency across every multiclass CT dataset
+# in this framework — AMOS22 itself isn't one of the paper's benchmarks, so
+# there is no "official" protocol to match here, only our own standard.
+#
+# image_mean/image_std, loss weights, dice smoothing and amp are aligned to
+# the upstream E-SAM release (read directly from its dataset.py/utils.py/
+# trainer.py, not inferred): CT images are fed to the model in raw [0,1]
+# range with no further ImageNet-style normalization (identity mean/std);
+# the loss is 0.2*CE + 0.8*Dice (Eq. 7's lambda=0.8, `dice_param` default in
+# train.py); DiceLoss's smoothing constant is 1e-5; and training runs in
+# plain FP32 (no autocast/AMP anywhere in trainer.py).
+
+seed: 42
+
+dataset:
+  name: amos22_ct
+  root: dataset/amos22_ct
+  manifest: manifests/amos22_ct_v1.json
+  version: amos22-ct-v1
+  task: multiclass
+  num_classes: 16
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.0, 0.0, 0.0]
+  image_std: [1.0, 1.0, 1.0]
+
+loss:
+  name: ce_dice
+  ce_weight: 0.2
+  dice_weight: 0.8
+  dice_smooth: 0.00001
+  ignore_background: false
+
+optimizer:
+  name: adamw
+  lr: 0.0005
+  weight_decay: 0.1
+
+scheduler:
+  # Paper-released recipe: 250-iteration linear warmup + polynomial decay 0.9.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
+
+training:
+  epochs: 50
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: false
+  prediction_threshold: 0.5
+  log_interval: 20
+  gradient_clip_norm: 1.0
+  early_stopping_patience: 10

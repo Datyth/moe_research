@@ -20,8 +20,15 @@ from torch.utils.data import DataLoader
 from src.configs import DatasetConfig
 from src.data import build_dataset
 from src.engine import Trainer, TrainerConfig, evaluate
+from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
+from src.tasks import PhaseBFuseTask, SegmentationTask
+
+TASK_REGISTRY = {
+    "segmentation": SegmentationTask,
+    "phase_b_fuse": PhaseBFuseTask,
+}
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -94,7 +101,7 @@ def create_run_directory(config: dict[str, Any]) -> Path:
     return candidate.resolve()
 
 
-def _git_metadata() -> tuple[str | None, bool | None]:
+def git_metadata() -> tuple[str | None, bool | None]:
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -115,7 +122,7 @@ def _git_metadata() -> tuple[str | None, bool | None]:
         return None, None
 
 
-def _device_metadata(requested: str) -> dict[str, str | None]:
+def device_metadata(requested: str) -> dict[str, str | None]:
     device = torch.device(requested)
     device_name: str | None = None
     if device.type == "cuda" and torch.cuda.is_available():
@@ -164,6 +171,7 @@ def build_optimizer(
 def build_scheduler(
     config: dict[str, Any],
     optimizer: torch.optim.Optimizer,
+    total_steps: int | None = None,
 ):
     scheduler_config = config["scheduler"]
     scheduler_name = scheduler_config["name"]
@@ -174,6 +182,18 @@ def build_scheduler(
             optimizer,
             T_max=int(config["training"]["epochs"]),
             eta_min=float(scheduler_config["eta_min"]),
+        )
+    if scheduler_name == "warmup_poly":
+        if total_steps is None:
+            raise ValueError(
+                "scheduler.name='warmup_poly' requires total_steps "
+                "(epochs * steps per epoch)."
+            )
+        return WarmupPolyLR(
+            optimizer,
+            total_steps=int(total_steps),
+            warmup_steps=int(scheduler_config["warmup_steps"]),
+            power=float(scheduler_config["power"]),
         )
     if scheduler_name == "reduce_on_plateau":
         return ReduceLROnPlateau(
@@ -186,7 +206,7 @@ def build_scheduler(
     raise ValueError(f"Unknown scheduler: {scheduler_name}")
 
 
-def _build_loaders(
+def build_loaders(
     config: dict[str, Any],
     dataset_config: DatasetConfig,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
@@ -214,7 +234,7 @@ def _build_loaders(
     return train_loader, val_loader, test_loader
 
 
-def _checkpoint_metadata(
+def build_checkpoint_metadata(
     config: dict[str, Any],
     model_config: dict[str, Any],
 ) -> dict[str, Any]:
@@ -260,7 +280,7 @@ def execute_experiment(
         raise FileNotFoundError(f"Tracked dataset manifest not found: {manifest_path}")
 
     metadata_path = resolved_run_dir / "metadata.json"
-    git_commit, git_dirty = _git_metadata()
+    git_commit, git_dirty = git_metadata()
     if resume:
         if not metadata_path.is_file():
             raise FileNotFoundError(f"Resume metadata not found: {metadata_path}")
@@ -281,7 +301,7 @@ def execute_experiment(
                 "manifest": str(manifest_path),
                 "manifest_sha256": file_sha256(manifest_path),
             },
-            "device": _device_metadata(config["training"]["device"]),
+            "device": device_metadata(config["training"]["device"]),
             "started_at": utc_now(),
             "resume_count": 0,
             "config_fingerprint": config_fingerprint(config),
@@ -293,7 +313,7 @@ def execute_experiment(
 
     try:
         dataset_config = build_dataset_config(config)
-        train_loader, val_loader, test_loader = _build_loaders(
+        train_loader, val_loader, test_loader = build_loaders(
             config,
             dataset_config,
         )
@@ -307,12 +327,33 @@ def execute_experiment(
         model = build_model(model_config)
         criterion = build_loss(config["loss"])
         optimizer = build_optimizer(config, model)
-        scheduler = build_scheduler(config, optimizer)
+        scheduler = build_scheduler(
+            config,
+            optimizer,
+            total_steps=int(config["training"]["epochs"]) * len(train_loader),
+        )
         training = config["training"]
+        threshold = float(training["prediction_threshold"])
+        boundary_tolerance = float(training["boundary_tolerance"])
+        task_name = config["task"]["name"]
+        task_class = TASK_REGISTRY[task_name]
+        task = task_class(
+            criterion=criterion,
+            threshold=threshold,
+            boundary_tolerance=boundary_tolerance,
+            task=dataset_config.task,
+        )
+        task_config = {
+            "name": task_name,
+            "threshold": threshold,
+            "boundary_tolerance": boundary_tolerance,
+            "task": dataset_config.task,
+        }
 
         trainer = Trainer(
             model=model,
-            criterion=criterion,
+            task=task,
+            task_config=task_config,
             optimizer=optimizer,
             scheduler=scheduler,
             train_loader=train_loader,
@@ -323,14 +364,15 @@ def execute_experiment(
                 last_checkpoint_path=resolved_run_dir / "last.pt",
                 best_checkpoint_path=resolved_run_dir / "best.pt",
                 history_path=resolved_run_dir / "history.json",
-                prediction_threshold=float(training["prediction_threshold"]),
-                boundary_tolerance=float(training["boundary_tolerance"]),
                 use_amp=bool(training["amp"]),
                 amp_dtype=str(training["amp_dtype"]),
                 log_interval=int(training["log_interval"]),
                 gradient_clip_norm=training["gradient_clip_norm"],
+                early_stopping_patience=training["early_stopping_patience"],
+                monitor=str(training["monitor"]),
+                monitor_mode=str(training["monitor_mode"]),
             ),
-            checkpoint_metadata=_checkpoint_metadata(config, model_config),
+            checkpoint_metadata=build_checkpoint_metadata(config, model_config),
         )
         if resume:
             trainer.resume(resolved_run_dir / "last.pt")
@@ -355,10 +397,8 @@ def execute_experiment(
         test_metrics = evaluate(
             model=model,
             loader=test_loader,
-            criterion=criterion,
+            task=task,
             device=training["device"],
-            threshold=float(training["prediction_threshold"]),
-            boundary_tolerance=float(training["boundary_tolerance"]),
         )
         test_payload = {
             "checkpoint": "best.pt",
@@ -366,6 +406,7 @@ def execute_experiment(
             "loss": test_metrics["loss"],
             "dice": test_metrics["dice"],
             "iou": test_metrics["iou"],
+            "hd": test_metrics["hd"],
             "hd95": test_metrics["hd95"],
             "assd": test_metrics["assd"],
             "boundary_f1": test_metrics["boundary_f1"],
@@ -375,10 +416,20 @@ def execute_experiment(
         metadata["status"] = "completed"
         metadata["ended_at"] = utc_now()
         metadata["best_epoch"] = int(best_checkpoint["epoch"])
-        metadata["best_val_dice"] = best_checkpoint["best_val_dice"]
+        metadata["monitor_name"] = best_checkpoint["monitor_name"]
+        metadata["monitor_mode"] = best_checkpoint["monitor_mode"]
+        metadata["best_monitor_value"] = best_checkpoint["best_monitor_value"]
+        if (
+            best_checkpoint["monitor_name"] == "dice"
+            and best_checkpoint["monitor_mode"] == "max"
+        ):
+            metadata["best_val_dice"] = best_checkpoint["best_monitor_value"]
+        else:
+            metadata.pop("best_val_dice", None)
         save_json(metadata_path, metadata)
         print(f"Test Dice        : {test_metrics['dice']:.6f}")
         print(f"Test IoU         : {test_metrics['iou']:.6f}")
+        print(f"Test HD          : {test_metrics['hd']:.6f}")
         print(f"Test HD95        : {test_metrics['hd95']:.6f}")
         print(f"Test ASSD        : {test_metrics['assd']:.6f}")
         print(f"Test Boundary F1 : {test_metrics['boundary_f1']:.6f}")

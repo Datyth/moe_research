@@ -1,0 +1,19 @@
+# Phase A shape encoder, 10 epochs.
+#
+# The Phase B fuse stage needs a shape encoder that reconstructs masks
+# tightly enough for its latent h_M to actually carry shape, and it is
+# deliberately trained to overfit: h_M is a privileged signal that only the
+# posterior q(z | I, M) sees at training time, so a low-bias encoder is
+# wanted here, not a well-regularized one. 10 epochs is where mask
+# reconstruction on ISIC2018 saturates without the run costing a full
+# 100-epoch schedule.
+#
+# The cosine schedule is kept but its T_max follows training.epochs, so this
+# is a complete 10-epoch decay rather than a truncated 100-epoch one.
+extends: isic2018_s0_small_cnn.yaml
+
+experiment:
+  name: phase_a_s0_small_cnn_10ep
+
+training:
+  epochs: 10

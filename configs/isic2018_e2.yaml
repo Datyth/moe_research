@@ -1,0 +1,21 @@
+# E2: LPEG only — SAM + Adapter + LPEG (no MoE-FEB).
+# Ablation row of paper Table 2 (LPEG column, MoE-FEB off).
+extends: isic2018_common.yaml
+
+experiment:
+  name: isic2018_e2
+  output_root: runs
+
+model:
+  name: esam
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: true
+  freeze_backbone: true
+
+scheduler:
+  # Paper-released recipe: 250-iteration linear warmup + polynomial decay 0.9.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

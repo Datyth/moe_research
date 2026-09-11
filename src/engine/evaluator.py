@@ -1,104 +1,69 @@
-"""Evaluation utilities for binary segmentation models."""
+"""Task-agnostic model evaluation."""
 
 from __future__ import annotations
 
 import math
+from numbers import Real
 
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from src.metrics import (
-    compute_binary_boundary_f1,
-    compute_binary_hd95_assd,
-    compute_binary_surface_distances,
-    compute_binary_surface_metrics,
-    extract_binary_surface,
-)
-from src.models import SegmentationOutput
+from src.tasks import Task, TaskStepOutput
 
 
-__all__ = [
-    "compute_binary_boundary_f1",
-    "compute_binary_dice_iou",
-    "compute_binary_hd95_assd",
-    "compute_binary_surface_distances",
-    "compute_binary_surface_metrics",
-    "evaluate",
-    "extract_binary_surface",
-]
+def _scalar_value(value: Tensor | float, *, name: str) -> float:
+    if isinstance(value, Tensor):
+        if value.ndim != 0:
+            raise ValueError(f"{name} must be scalar, got shape {tuple(value.shape)}.")
+        result = float(value.detach().item())
+    elif isinstance(value, Real) and not isinstance(value, bool):
+        result = float(value)
+    else:
+        raise TypeError(f"{name} must be a scalar tensor or number.")
+    if not math.isfinite(result):
+        raise FloatingPointError(f"{name} must be finite.")
+    return result
 
 
-def compute_binary_dice_iou(
-    logits: Tensor,
-    targets: Tensor,
-    *,
-    threshold: float = 0.5,
-) -> tuple[Tensor, Tensor]:
-    """Compute per-sample Dice and IoU from binary-segmentation logits."""
+def validate_step_output(step: TaskStepOutput) -> None:
+    """Validate the shared per-batch task contract."""
 
-    if logits.shape != targets.shape:
-        raise ValueError(
-            "logits and targets must have the same shape, got "
-            f"{tuple(logits.shape)} and {tuple(targets.shape)}."
+    if not isinstance(step, TaskStepOutput):
+        raise TypeError(
+            "Task steps must return TaskStepOutput, got "
+            f"{type(step).__name__}."
         )
-    if logits.ndim != 4 or logits.shape[1] != 1:
-        raise ValueError(
-            "Binary metrics require logits and targets with shape [B, 1, H, W]."
-        )
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError("threshold must be in [0, 1].")
+    if not isinstance(step.loss, Tensor):
+        raise TypeError("TaskStepOutput.loss must be a tensor.")
+    _scalar_value(step.loss, name="TaskStepOutput.loss")
+    if not isinstance(step.metrics, dict):
+        raise TypeError("TaskStepOutput.metrics must be a dictionary.")
+    if "loss" in step.metrics:
+        raise ValueError("TaskStepOutput.metrics must not contain 'loss'.")
+    for name, value in step.metrics.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("TaskStepOutput metric names must be non-empty strings.")
+        _scalar_value(value, name=f"TaskStepOutput.metrics[{name!r}]")
+    if (
+        isinstance(step.batch_size, bool)
+        or not isinstance(step.batch_size, int)
+        or step.batch_size <= 0
+    ):
+        raise ValueError("TaskStepOutput.batch_size must be a positive integer.")
 
-    predictions = torch.sigmoid(logits) >= threshold
-    target_masks = targets >= 0.5
-    predictions = predictions.flatten(start_dim=1)
-    target_masks = target_masks.flatten(start_dim=1)
-
-    intersection = torch.logical_and(predictions, target_masks).sum(dim=1).float()
-    prediction_size = predictions.sum(dim=1).float()
-    target_size = target_masks.sum(dim=1).float()
-
-    dice_denominator = prediction_size + target_size
-    union = prediction_size + target_size - intersection
-    ones = torch.ones_like(intersection)
-
-    dice = torch.where(
-        dice_denominator == 0,
-        ones,
-        2.0 * intersection / dice_denominator,
-    )
-    iou = torch.where(union == 0, ones, intersection / union)
-    return dice, iou
 
 def evaluate(
     *,
     model: nn.Module,
     loader: DataLoader,
-    criterion: nn.Module,
+    task: Task,
     device: str | torch.device,
-    threshold: float = 0.5,
-    boundary_tolerance: float = 2,
 ) -> dict[str, float]:
-    """Return sample-mean loss and binary region/surface metrics."""
+    """Return sample-weighted mean loss and task-defined metrics."""
 
     if len(loader) == 0:
         raise ValueError("loader must contain at least one batch.")
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError("threshold must be in [0, 1].")
-    if isinstance(boundary_tolerance, bool):
-        raise ValueError("boundary_tolerance must be a non-negative number.")
-    try:
-        resolved_boundary_tolerance = float(boundary_tolerance)
-    except (TypeError, ValueError) as error:
-        raise ValueError(
-            "boundary_tolerance must be a non-negative number."
-        ) from error
-    if (
-        not math.isfinite(resolved_boundary_tolerance)
-        or resolved_boundary_tolerance < 0.0
-    ):
-        raise ValueError("boundary_tolerance must be a non-negative number.")
-
     resolved_device = torch.device(device)
     if resolved_device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError(
@@ -107,90 +72,51 @@ def evaluate(
 
     was_training = model.training
     model.to(resolved_device)
-    criterion.to(resolved_device)
-    model.eval()
-
+    task.criterion.to(resolved_device)
     total_loss = 0.0
-    total_dice = 0.0
-    total_iou = 0.0
-    total_hd95 = 0.0
-    total_assd = 0.0
-    total_boundary_f1 = 0.0
+    total_metrics: dict[str, float] = {}
+    expected_metric_keys: tuple[str, ...] | None = None
     total_samples = 0
 
     try:
+        model.eval()
         with torch.inference_mode():
             for batch in loader:
-                if "image" not in batch or "mask" not in batch:
-                    raise KeyError(
-                        "Each evaluation batch must contain 'image' and 'mask'."
-                    )
-                images = batch["image"].to(
-                    resolved_device,
-                    dtype=torch.float32,
-                    non_blocking=True,
-                )
-                targets = batch["mask"].to(
-                    resolved_device,
-                    dtype=torch.float32,
-                    non_blocking=True,
-                )
-                batch_size = images.shape[0]
-
-                output = model(images)
-                if not isinstance(output, SegmentationOutput):
-                    raise TypeError(
-                        "Model forward must return SegmentationOutput, got "
-                        f"{type(output).__name__}."
-                    )
-                logits = output.logits
-                loss = criterion(logits, targets)
-                if loss.ndim != 0:
+                step = task.evaluation_step(model, batch, resolved_device)
+                validate_step_output(step)
+                metric_keys = tuple(step.metrics)
+                if expected_metric_keys is None:
+                    expected_metric_keys = metric_keys
+                    total_metrics = {name: 0.0 for name in metric_keys}
+                elif set(metric_keys) != set(expected_metric_keys):
                     raise ValueError(
-                        "criterion must return a scalar loss, got "
-                        f"shape {tuple(loss.shape)}."
+                        "Task evaluation metric keys changed across batches: "
+                        f"expected {sorted(expected_metric_keys)}, got "
+                        f"{sorted(metric_keys)}."
                     )
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("Non-finite evaluation loss detected.")
 
-                dice, iou = compute_binary_dice_iou(
-                    logits,
-                    targets,
-                    threshold=threshold,
+                total_loss += (
+                    _scalar_value(step.loss, name="TaskStepOutput.loss")
+                    * step.batch_size
                 )
-                if not torch.isfinite(dice).all() or not torch.isfinite(iou).all():
-                    raise FloatingPointError("Non-finite evaluation metric detected.")
-                hd95, assd, boundary_f1 = compute_binary_surface_metrics(
-                    logits,
-                    targets,
-                    threshold=threshold,
-                    boundary_tolerance=resolved_boundary_tolerance,
-                )
-                if not (
-                    torch.isfinite(hd95).all()
-                    and torch.isfinite(assd).all()
-                    and torch.isfinite(boundary_f1).all()
-                ):
-                    raise FloatingPointError("Non-finite evaluation metric detected.")
-
-                total_loss += loss.item() * batch_size
-                total_dice += dice.sum().item()
-                total_iou += iou.sum().item()
-                total_hd95 += hd95.sum().item()
-                total_assd += assd.sum().item()
-                total_boundary_f1 += boundary_f1.sum().item()
-                total_samples += batch_size
+                for name, value in step.metrics.items():
+                    total_metrics[name] += (
+                        _scalar_value(
+                            value,
+                            name=f"TaskStepOutput.metrics[{name!r}]",
+                        )
+                        * step.batch_size
+                    )
+                total_samples += step.batch_size
     finally:
         model.train(was_training)
 
     if total_samples == 0:
-        raise ValueError("loader produced no samples.")
-
+        raise ValueError("loader produced zero samples.")
     return {
         "loss": total_loss / total_samples,
-        "dice": total_dice / total_samples,
-        "iou": total_iou / total_samples,
-        "hd95": total_hd95 / total_samples,
-        "assd": total_assd / total_samples,
-        "boundary_f1": total_boundary_f1 / total_samples,
+        **{
+            name: total_metrics[name] / total_samples
+            for name in (expected_metric_keys or ())
+        },
     }

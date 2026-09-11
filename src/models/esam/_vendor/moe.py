@@ -8,6 +8,10 @@
 # of an epoch is smaller and a fixed top_k can exceed the available token
 # count (RuntimeError from `.topk()`). Replaced with `top_k_ratio: float`,
 # resolved against the actual token count on every forward call.
+#
+# Deviation: routing noise is now training-only. Upstream sampled noise
+# unconditionally, so validation/evaluation results depended on random
+# expert selection. In eval mode the router uses the clean logits.
 
 import torch
 import torch.nn as nn
@@ -45,13 +49,13 @@ class ExpertChoiceTokenNoisyTopkRouter(nn.Module):
         top_k = max(1, round(total_tokens * self.top_k_ratio))
 
         logits = self.topkroute_linear(mh_output).reshape(-1, self.num_experts).T
-        noise_logits = self.noise_linear(mh_output).reshape(-1, self.num_experts).T
+        if self.training:
+            noise_logits = self.noise_linear(mh_output).reshape(-1, self.num_experts).T
+            noise = torch.randn_like(logits) * F.softplus(noise_logits)
+            logits = logits + noise
 
-        noise = torch.randn_like(logits) * F.softplus(noise_logits)
-        noisy_logits = logits + noise
-
-        top_k_logits, indices = noisy_logits.topk(top_k, dim=-1)
-        zeros = torch.full_like(noisy_logits, float("-inf"))
+        top_k_logits, indices = logits.topk(top_k, dim=-1)
+        zeros = torch.full_like(logits, float("-inf"))
         sparse_logits = zeros.scatter(-1, indices, top_k_logits)
         router_output = F.softmax(sparse_logits, dim=-1)
         return router_output, indices

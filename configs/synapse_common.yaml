@@ -1,0 +1,74 @@
+# Base config for Synapse/BTCV CT (14-class abdominal organ segmentation:
+# 13 organs + background). Missing experiment/model on purpose —
+# synapse_*.yaml extend this via `extends:` (see docs/segmentation_run_guide.md).
+#
+# Hyperparameters (optimizer/scheduler) and the 24/6 train/test case split
+# (manifest v2) are aligned to MoE-SAM (MICCAI 2025)'s reported BTCV
+# protocol (30 scans, 24 train / 6 test, 13 organs) — see the "Implementation
+# Details" section: AdamW lr=5e-4 + warmup, weight_decay=0.1, batch_size=8.
+# Resolution stays 256x256: the paper's 224x224 note applies only to its
+# separate 8-organ "Synapse CT" benchmark (18/12 split), not the 13-organ
+# BTCV protocol this dataset matches.
+#
+# image_mean/image_std, loss weights, dice smoothing and amp are aligned to
+# the upstream E-SAM release (read directly from its dataset.py/utils.py/
+# trainer.py, not inferred): CT images are fed to the model in raw [0,1]
+# range with no further ImageNet-style normalization (identity mean/std);
+# the loss is 0.2*CE + 0.8*Dice (Eq. 7's lambda=0.8, `dice_param` default in
+# train.py); DiceLoss's smoothing constant is 1e-5; and training runs in
+# plain FP32 (no autocast/AMP anywhere in trainer.py).
+#
+# STALE DATA WARNING: manifest v2 below points at slices converted with the
+# [-125, 275] HU window. The MoE-SAM authors have since confirmed (email
+# 2026-09-07, docs/moe_sam_author_clarifications.md) that BTCV uses
+# [-150, 500]. Numbers produced from v2 data are therefore NOT comparable to
+# the paper's BTCV column. To rebuild with the correct window:
+#
+#   python scripts/data/prepare_synapse.py \
+#     --manifest-output manifests/synapse_btcv_v3.json    # --hu-window defaults to -150 500
+#
+# then point dataset.manifest/version at v3 here. v2 is left in place so the
+# existing runs stay reproducible against the data they were trained on.
+
+seed: 42
+
+dataset:
+  name: synapse_btcv
+  root: dataset/synapse_btcv
+  manifest: manifests/synapse_btcv_v2.json
+  version: synapse-btcv-v2
+  task: multiclass
+  num_classes: 14
+  in_channels: 3
+  image_size: [256, 256]
+  image_mean: [0.0, 0.0, 0.0]
+  image_std: [1.0, 1.0, 1.0]
+
+loss:
+  name: ce_dice
+  ce_weight: 0.2
+  dice_weight: 0.8
+  dice_smooth: 0.00001
+  ignore_background: false
+
+optimizer:
+  name: adamw
+  lr: 0.0005
+  weight_decay: 0.1
+
+scheduler:
+  # Paper-released recipe: 250-iteration linear warmup + polynomial decay 0.9.
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
+
+training:
+  epochs: 50
+  batch_size: 8
+  num_workers: 8
+  device: cuda
+  amp: false
+  prediction_threshold: 0.5
+  log_interval: 20
+  gradient_clip_norm: 1.0
+  early_stopping_patience: 10

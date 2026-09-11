@@ -1,6 +1,14 @@
 # Vendored from https://github.com/Asphyxiate-Rye/E-SAM
 # segment_anything_ESAM/modeling/prompt_encoder.py. Dropped the unused
 # `from .image_encoder import Block` import (never referenced here).
+#
+# Deviation: the LPEG block (LayerNorm -> GELU -> AdaptiveAvgPool ->
+# Linear -> activation -> Linear) that upstream inlined in `forward()` is
+# extracted into `src/models/esam/lpeg.py` and only instantiated when
+# `use_lpeg=True`, so LPEG-only / no-LPEG ablations share one encoder class.
+# `forward()` also accepts an explicit `batch_size` because in the no-LPEG
+# ablation no `image_embedding` is passed and `_get_batch_size` would
+# otherwise fall back to 1.
 
 import numpy as np
 import torch
@@ -9,6 +17,7 @@ from torch import nn
 from typing import Any, Optional, Tuple, Type
 
 from .common import LayerNorm2d
+from ..lpeg import LPEG
 
 
 class PromptEncoder(nn.Module):
@@ -20,6 +29,7 @@ class PromptEncoder(nn.Module):
         input_image_size: Tuple[int, int],
         mask_in_chans: int,
         activation: Type[nn.Module] = nn.GELU,
+        use_lpeg: bool = False,
     ) -> None:
         """
         Encodes prompts for input to SAM's mask decoder.
@@ -58,12 +68,8 @@ class PromptEncoder(nn.Module):
             nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1),
         )
         self.no_mask_embed = nn.Embedding(1, embed_dim)
-        self.layernorm = nn.Sequential(LayerNorm2d(256))
-        self.gelu = nn.GELU()
-        self.GAP = nn.AdaptiveAvgPool2d(1)
-        self.fc1 = nn.Linear(256, 256 // 16)
-        self.relu = nn.ReLU(inplace=True)
-        self.fc2 = nn.Linear(256 // 16, embed_dim)
+        self.use_lpeg = use_lpeg
+        self.lpeg = LPEG(embed_dim=embed_dim) if use_lpeg else None
 
     def get_dense_pe(self) -> torch.Tensor:
         """
@@ -140,6 +146,7 @@ class PromptEncoder(nn.Module):
         boxes: Optional[torch.Tensor],
         masks: Optional[torch.Tensor],
         image_embedding: None,
+        batch_size: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Embeds different types of prompts, returning both sparse and dense
@@ -158,17 +165,20 @@ class PromptEncoder(nn.Module):
           torch.Tensor: dense embeddings for the masks, in the shape
             Bx(embed_dim)x(embed_H)x(embed_W)
         """
-        bs = self._get_batch_size(points, boxes, masks, image_embedding)
+        if batch_size is not None:
+            bs = int(batch_size)
+        else:
+            bs = self._get_batch_size(points, boxes, masks, image_embedding)
         sparse_embeddings = torch.empty((bs, 0, self.embed_dim), device=self._get_device())
         if image_embedding is not None:
-            img_feature = self.layernorm(image_embedding)
-            img_feature = self.gelu(img_feature)
-            img_feature = self.GAP(img_feature)
-            img_feature = img_feature.reshape(bs, -1)
-            prompt_embedding = self.fc1(img_feature)
-            prompt_embedding = self.relu(prompt_embedding)
-            prompt_embedding = self.fc2(prompt_embedding)
-            sparse_embeddings = torch.cat([sparse_embeddings, prompt_embedding.unsqueeze(1)], dim=1)
+            if self.lpeg is None:
+                raise ValueError(
+                    "image_embedding was provided but the prompt encoder was "
+                    "built with use_lpeg=False."
+                )
+            sparse_embeddings = torch.cat(
+                [sparse_embeddings, self.lpeg(image_embedding)], dim=1
+            )
 
         if points is not None:
             coords, labels = points

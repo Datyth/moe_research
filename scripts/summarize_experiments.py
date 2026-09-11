@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-METRIC_NAMES = ("loss", "dice", "iou", "hd95", "assd", "boundary_f1")
+METRIC_NAMES = ("loss", "dice", "iou", "hd", "hd95", "assd", "boundary_f1")
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -168,6 +168,8 @@ class TestExperimentFramework(unittest.TestCase):
             self.assertTrue(Path(config["dataset"]["manifest"]).is_absolute())
             self.assertEqual(config["training"]["prediction_threshold"], 0.5)
             self.assertEqual(config["training"]["boundary_tolerance"], 2.0)
+            self.assertEqual(config["training"]["monitor"], "dice")
+            self.assertEqual(config["training"]["monitor_mode"], "max")
             self.assertIsInstance(build_loss(config["loss"]), BCEDiceLoss)
 
             model = build_model({
@@ -211,6 +213,16 @@ class TestExperimentFramework(unittest.TestCase):
             invalid_scheduler["scheduler"]["name"] = "unknown"
             with self.assertRaisesRegex(ValueError, "scheduler.name"):
                 resolve_experiment_config(invalid_scheduler, project_root=root)
+
+            invalid_monitor = fixture.raw_config()
+            invalid_monitor["training"]["monitor"] = ""
+            with self.assertRaisesRegex(ValueError, "training.monitor"):
+                resolve_experiment_config(invalid_monitor, project_root=root)
+
+            invalid_monitor_mode = fixture.raw_config()
+            invalid_monitor_mode["training"]["monitor_mode"] = "sideways"
+            with self.assertRaisesRegex(ValueError, "training.monitor_mode"):
+                resolve_experiment_config(invalid_monitor_mode, project_root=root)
 
 
     def test_training_seed_does_not_change_frozen_manifest_split(self):
@@ -266,6 +278,7 @@ class TestExperimentFramework(unittest.TestCase):
                     "loss",
                     "dice",
                     "iou",
+                    "hd",
                     "hd95",
                     "assd",
                     "boundary_f1",
@@ -294,6 +307,7 @@ class TestExperimentFramework(unittest.TestCase):
                     "loss": 1.0 - dice,
                     "dice": dice,
                     "iou": dice - 0.1,
+                    "hd": 2.0 * (1.0 - dice),
                     "hd95": 1.0 - dice,
                     "assd": 0.5 * (1.0 - dice),
                     "boundary_f1": dice - 0.05,
@@ -312,7 +326,7 @@ class TestExperimentFramework(unittest.TestCase):
             summary_path = runs_root / "summary.csv"
             write_summary_csv(summary_path, rows, aggregates)
             header = summary_path.read_text().splitlines()[0].split(",")
-            for metric_name in ("hd95", "assd", "boundary_f1"):
+            for metric_name in ("hd", "hd95", "assd", "boundary_f1"):
                 self.assertIn(metric_name, header)
                 self.assertIn(f"{metric_name}_mean", header)
                 self.assertIn(f"{metric_name}_std", header)
@@ -346,3 +360,57 @@ class TestExperimentFramework(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTaskSection(unittest.TestCase):
+    """The optional `task` section selecting which Task the runner builds."""
+
+    def test_task_defaults_to_segmentation_when_absent(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(fixture.raw_config()))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(resolved["task"], {"name": "segmentation"})
+
+    def test_phase_b_fuse_task_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "phase_b_fuse"}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(resolved["task"]["name"], "phase_b_fuse")
+
+    def test_unknown_task_name_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "not_a_task"}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            with self.assertRaises(ValueError):
+                load_experiment_config(path, project_root=root)
+
+    def test_model_checkpoint_paths_resolve_against_the_project_root(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["model"]["checkpoint"] = "checkpoints/sam.pth"
+            config["model"]["shape_teacher_checkpoint"] = "runs/phase_a/best.pt"
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(
+                resolved["model"]["checkpoint"],
+                str(root / "checkpoints" / "sam.pth"),
+            )
+            self.assertEqual(
+                resolved["model"]["shape_teacher_checkpoint"],
+                str(root / "runs" / "phase_a" / "best.pt"),
+            )

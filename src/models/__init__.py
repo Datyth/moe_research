@@ -7,6 +7,7 @@ from .base import (
 from .registry import build_model
 from .unet import UNetModel
 from .esam import EsamModel
+from .phase_b import PhaseBFuseStage
 
 __all__ = [
     "BaseSegmentationModel",
@@ -14,5 +15,6 @@ __all__ = [
     "SegmentationPrediction",
     "UNetModel",
     "EsamModel",
+    "PhaseBFuseStage",
     "build_model",
 ]
