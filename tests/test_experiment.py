@@ -168,6 +168,8 @@ class TestExperimentFramework(unittest.TestCase):
             self.assertTrue(Path(config["dataset"]["manifest"]).is_absolute())
             self.assertEqual(config["training"]["prediction_threshold"], 0.5)
             self.assertEqual(config["training"]["boundary_tolerance"], 2.0)
+            self.assertEqual(config["training"]["monitor"], "dice")
+            self.assertEqual(config["training"]["monitor_mode"], "max")
             self.assertIsInstance(build_loss(config["loss"]), BCEDiceLoss)
 
             model = build_model({
@@ -211,6 +213,16 @@ class TestExperimentFramework(unittest.TestCase):
             invalid_scheduler["scheduler"]["name"] = "unknown"
             with self.assertRaisesRegex(ValueError, "scheduler.name"):
                 resolve_experiment_config(invalid_scheduler, project_root=root)
+
+            invalid_monitor = fixture.raw_config()
+            invalid_monitor["training"]["monitor"] = ""
+            with self.assertRaisesRegex(ValueError, "training.monitor"):
+                resolve_experiment_config(invalid_monitor, project_root=root)
+
+            invalid_monitor_mode = fixture.raw_config()
+            invalid_monitor_mode["training"]["monitor_mode"] = "sideways"
+            with self.assertRaisesRegex(ValueError, "training.monitor_mode"):
+                resolve_experiment_config(invalid_monitor_mode, project_root=root)
 
 
     def test_training_seed_does_not_change_frozen_manifest_split(self):

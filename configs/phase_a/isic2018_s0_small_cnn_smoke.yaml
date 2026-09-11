@@ -1,0 +1,13 @@
+extends: isic2018_s0_small_cnn.yaml
+
+experiment:
+  name: phase_a_s0_small_cnn_smoke
+
+scheduler:
+  name: none
+
+training:
+  epochs: 1
+  batch_size: 4
+  num_workers: 0
+  amp: false

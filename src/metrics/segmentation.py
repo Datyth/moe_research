@@ -35,6 +35,36 @@ def _validate_metric_inputs(
         raise ValueError("threshold must be in [0, 1].")
 
 
+def compute_binary_dice_iou(
+    logits: Tensor,
+    targets: Tensor,
+    *,
+    threshold: float = 0.5,
+) -> tuple[Tensor, Tensor]:
+    """Compute per-sample Dice and IoU from binary-segmentation logits."""
+
+    _validate_metric_inputs(logits, targets, threshold=threshold)
+    predictions = torch.sigmoid(logits) >= threshold
+    target_masks = targets >= 0.5
+    predictions = predictions.flatten(start_dim=1)
+    target_masks = target_masks.flatten(start_dim=1)
+
+    intersection = torch.logical_and(predictions, target_masks).sum(dim=1).float()
+    prediction_size = predictions.sum(dim=1).float()
+    target_size = target_masks.sum(dim=1).float()
+    dice_denominator = prediction_size + target_size
+    union = prediction_size + target_size - intersection
+    ones = torch.ones_like(intersection)
+
+    dice = torch.where(
+        dice_denominator == 0,
+        ones,
+        2.0 * intersection / dice_denominator,
+    )
+    iou = torch.where(union == 0, ones, intersection / union)
+    return dice, iou
+
+
 def _validate_boundary_tolerance(boundary_tolerance: float) -> float:
     if isinstance(boundary_tolerance, bool):
         raise ValueError("boundary_tolerance must be a non-negative number.")

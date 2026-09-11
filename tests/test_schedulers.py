@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from src.engine import Trainer, TrainerConfig, WarmupPolyLR
 from src.losses import BCEDiceLoss
 from src.models import build_model
+from src.tasks import SegmentationTask
 
 
 class TinySegmentationDataset(Dataset):
@@ -113,7 +114,7 @@ class TestTrainerPerIterationStepping(unittest.TestCase):
             root = Path(temporary_directory)
             trainer = Trainer(
                 model=model,
-                criterion=BCEDiceLoss(),
+                task=SegmentationTask(criterion=BCEDiceLoss()),
                 optimizer=optimizer,
                 scheduler=scheduler,
                 train_loader=loader,
