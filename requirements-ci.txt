@@ -1,4 +1,5 @@
 matplotlib
+MedPy
 nibabel
 numpy
 Pillow
