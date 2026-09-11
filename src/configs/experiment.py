@@ -21,6 +21,10 @@ REQUIRED_SECTIONS = (
     "training",
 )
 EXPERIMENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+SUPPORTED_TASKS = ("segmentation", "phase_b_fuse")
+# Model fields naming a file on disk; resolved against the project root so a
+# config stays runnable from any working directory.
+MODEL_PATH_FIELDS = ("checkpoint", "shape_teacher_checkpoint")
 
 
 def _require_mapping(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -207,6 +211,17 @@ def resolve_experiment_config(
     if len(dataset["image_std"]) != dataset["in_channels"]:
         raise ValueError("dataset.image_std must match dataset.in_channels.")
 
+    # `task` is optional: configs written before the Task abstraction, and
+    # every ordinary segmentation config, omit it entirely.
+    task_config = config.setdefault("task", {"name": "segmentation"})
+    if not isinstance(task_config, dict):
+        raise ValueError("Configuration section 'task' must be a mapping.")
+    task_config.setdefault("name", "segmentation")
+    if task_config["name"] not in SUPPORTED_TASKS:
+        raise ValueError(
+            f"task.name must be one of: {', '.join(sorted(SUPPORTED_TASKS))}."
+        )
+
     model = config["model"]
     _require_keys(model, "model", ("name",))
     shared_model_fields = {"task", "in_channels", "num_classes"}
@@ -216,6 +231,12 @@ def resolve_experiment_config(
             "Shared dataset fields must not be repeated in model config: "
             f"{', '.join(duplicated_fields)}."
         )
+    for field_name in MODEL_PATH_FIELDS:
+        if model.get(field_name) is not None:
+            model[field_name] = _resolve_path(
+                model[field_name], root, f"model.{field_name}"
+            )
+
     loss = config["loss"]
     _require_keys(loss, "loss", ("name",))
 

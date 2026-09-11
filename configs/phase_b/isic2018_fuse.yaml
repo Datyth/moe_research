@@ -1,0 +1,49 @@
+# Phase B, fuse stage: MoE-SAM image branch + frozen Phase-A Shape Teacher.
+#
+# The model is E3 (full MoE-SAM: SAM ViT-B + Adapter + MoE-FEB + LPEG) with
+# two additions from the proposal's Phase B:
+#
+#   h_I  multi-level image descriptor over ViT layers {3,6,9,12}
+#        (1x1 projection per level -> GAP -> softmax level attention)
+#   h_M  shape latent from the Phase-A Shape Teacher G_M, frozen, decoder
+#        discarded; the ground-truth mask is privileged training-time input
+#   h_q  = [h_I ; h_M], the fuse-stage output, 256 + 256 = 512
+#
+# NOTE: nothing trains h_I yet. The posterior q(z | I, M), its KL term and the
+# Top-K routing it drives are the next stage; until they exist the descriptor
+# and its level attention get no gradient and segmentation quality here should
+# match E3. That equality is the point of this config: it verifies the fuse
+# stage is wired without disturbing the baseline.
+#
+# `model.shape_teacher_checkpoint` must point at a Phase-A run's best.pt. Train
+# one with configs/phase_a/isic2018_s0_small_cnn_10ep.yaml.
+extends: ../isic2018_common.yaml
+
+experiment:
+  name: phase_b_isic2018_fuse
+  output_root: runs
+
+model:
+  name: phase_b_fuse
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: true
+  use_lpeg: true
+  moe_num_experts: 4
+  moe_top_k_ratio: 0.5
+  freeze_backbone: true
+
+  # Phase B additions.
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt
+  freeze_shape_teacher: true
+
+task:
+  name: phase_b_fuse
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

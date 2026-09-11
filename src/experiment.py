@@ -23,7 +23,12 @@ from src.engine import Trainer, TrainerConfig, evaluate
 from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
-from src.tasks import SegmentationTask
+from src.tasks import PhaseBFuseTask, SegmentationTask
+
+TASK_REGISTRY = {
+    "segmentation": SegmentationTask,
+    "phase_b_fuse": PhaseBFuseTask,
+}
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -330,14 +335,16 @@ def execute_experiment(
         training = config["training"]
         threshold = float(training["prediction_threshold"])
         boundary_tolerance = float(training["boundary_tolerance"])
-        task = SegmentationTask(
+        task_name = config["task"]["name"]
+        task_class = TASK_REGISTRY[task_name]
+        task = task_class(
             criterion=criterion,
             threshold=threshold,
             boundary_tolerance=boundary_tolerance,
             task=dataset_config.task,
         )
         task_config = {
-            "name": "segmentation",
+            "name": task_name,
             "threshold": threshold,
             "boundary_tolerance": boundary_tolerance,
             "task": dataset_config.task,

@@ -106,14 +106,12 @@ class SegmentationTask:
             batch_size=images.shape[0],
         )
 
-    def evaluation_step(
+    def _segmentation_metrics(
         self,
-        model: nn.Module,
-        batch: Any,
-        device: Any,
-    ) -> TaskStepOutput:
-        images, targets = self._prepare_batch(batch, device)
-        logits = self._extract_logits(model(images))
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Region and surface metrics as batch means, per this task's mode."""
 
         if self.task == "multiclass":
             dice, iou = compute_multiclass_dice_iou(logits, targets)
@@ -134,16 +132,25 @@ class SegmentationTask:
                 threshold=self.threshold,
                 boundary_tolerance=self.boundary_tolerance,
             )
+        return {
+            "dice": dice.mean(),
+            "iou": iou.mean(),
+            "hd": hd.mean(),
+            "hd95": hd95.mean(),
+            "assd": assd.mean(),
+            "boundary_f1": boundary_f1.mean(),
+        }
 
+    def evaluation_step(
+        self,
+        model: nn.Module,
+        batch: Any,
+        device: Any,
+    ) -> TaskStepOutput:
+        images, targets = self._prepare_batch(batch, device)
+        logits = self._extract_logits(model(images))
         return TaskStepOutput(
             loss=self.criterion(logits, targets),
-            metrics={
-                "dice": dice.mean(),
-                "iou": iou.mean(),
-                "hd": hd.mean(),
-                "hd95": hd95.mean(),
-                "assd": assd.mean(),
-                "boundary_f1": boundary_f1.mean(),
-            },
+            metrics=self._segmentation_metrics(logits, targets),
             batch_size=images.shape[0],
         )

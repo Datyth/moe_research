@@ -137,7 +137,13 @@ class Sam_my(nn.Module):
                 "masks": masks,
                 "iou_predictions": iou_predictions,
                 "low_res_logits": low_res_masks,
-                "indices": indices}
+                "indices": indices,
+                # Not upstream: the per-block ViT outputs, already computed for
+                # MoE-FEB, are also what Phase B's multi-level descriptor reads
+                # (layers 3/6/9/12). Returning the existing list costs nothing;
+                # re-running the encoder to get them would cost a second
+                # forward pass.
+                "block_outputs": low_image_embeddings}
 
         return outputs
 

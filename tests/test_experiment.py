@@ -360,3 +360,57 @@ class TestExperimentFramework(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTaskSection(unittest.TestCase):
+    """The optional `task` section selecting which Task the runner builds."""
+
+    def test_task_defaults_to_segmentation_when_absent(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(fixture.raw_config()))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(resolved["task"], {"name": "segmentation"})
+
+    def test_phase_b_fuse_task_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "phase_b_fuse"}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(resolved["task"]["name"], "phase_b_fuse")
+
+    def test_unknown_task_name_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "not_a_task"}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            with self.assertRaises(ValueError):
+                load_experiment_config(path, project_root=root)
+
+    def test_model_checkpoint_paths_resolve_against_the_project_root(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["model"]["checkpoint"] = "checkpoints/sam.pth"
+            config["model"]["shape_teacher_checkpoint"] = "runs/phase_a/best.pt"
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(
+                resolved["model"]["checkpoint"],
+                str(root / "checkpoints" / "sam.pth"),
+            )
+            self.assertEqual(
+                resolved["model"]["shape_teacher_checkpoint"],
+                str(root / "runs" / "phase_a" / "best.pt"),
+            )
