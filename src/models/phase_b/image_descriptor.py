@@ -5,7 +5,8 @@ Representation": intermediate ViT-B features are taken from layers
 L = {3, 6, 9, 12}, each projected to a common dimension C_s by a learnable
 1x1 projection P_l, globally pooled into u^(l), and combined by a softmax
 level attention into h_I. The untouched token representations X^(l) are
-returned alongside, because the later MoE enhancement stage consumes them.
+returned alongside, because the MoE enhancement stage (`moe_enhancement`)
+consumes them.
 """
 
 from __future__ import annotations

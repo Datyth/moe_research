@@ -9,7 +9,8 @@ Wires the two branches the proposal's Phase B diagram shows converging:
 The segmentation head of the MoE-SAM branch is kept and still produces mask
 logits, so this module is a complete trainable segmentation model that
 additionally exposes h_q. The posterior q(z | I, M), Top-K routing and
-hierarchical enhancement are the next stage and are not built here.
+hierarchical enhancement live in the later stages of Phase B
+(``phase_b_router`` and ``phase_b_moe``) and are not built here.
 """
 
 from __future__ import annotations

@@ -23,12 +23,13 @@ from src.engine import Trainer, TrainerConfig, evaluate
 from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
-from src.tasks import PhaseBFuseTask, PhaseBRouterTask, SegmentationTask
+from src.tasks import PhaseBFuseTask, PhaseBMoETask, PhaseBRouterTask, SegmentationTask
 
 TASK_REGISTRY = {
     "segmentation": SegmentationTask,
     "phase_b_fuse": PhaseBFuseTask,
     "phase_b_router": PhaseBRouterTask,
+    "phase_b_moe": PhaseBMoETask,
 }
 
 
@@ -338,13 +339,14 @@ def execute_experiment(
         boundary_tolerance = float(training["boundary_tolerance"])
         task_name = config["task"]["name"]
         task_class = TASK_REGISTRY[task_name]
-        # The router task takes the two routing-loss weights; the others take
-        # none. Passing the whole `task` section keeps that mapping in one
-        # place while leaving a config's extra keys (e.g. `name`) harmless:
-        # the constructor reads only what it knows.
+        # The router and MoE tasks take the two routing-loss weights; the
+        # others take none. Passing the whole `task` section keeps that
+        # mapping in one place while leaving a config's extra keys (e.g.
+        # `name`) harmless: the constructor reads only what it knows.
+        routing_tasks = ("phase_b_router", "phase_b_moe")
         task_kwargs = (
             {key: config["task"][key] for key in ("lambda_latent", "lambda_balance")}
-            if task_name == "phase_b_router"
+            if task_name in routing_tasks
             else {}
         )
         task = task_class(

@@ -1,0 +1,58 @@
+# Phase B, full stage: routed expert enhancement + decoder injection.
+#
+# Extends the router stage (see isic2018_fuse.yaml for the fuse-stage
+# additions) with the proposal's Section 1.3 wiring:
+#
+#   E_k      feed-forward shape experts over X^(l) tokens (Eq. 45)
+#            LayerNorm -> 768->3072 -> GELU -> 3072->768, K=4
+#   beta     per-expert layer preference g_layer([v^(l); z; e_k]) (Eqs. 40-44)
+#   gamma    fused multi-level weight sum_k pi_k beta_{k,l}   (Eqs. 48-49)
+#   Z_fused  sum_l gamma_l X_hat^(l), neck -> E_aux           (Eqs. 50, 53)
+#   E_enh    E_SAM + E_aux -> prompt + mask decoder           (Eqs. 54-56)
+#
+# This stage breaks bit-identity with E3 *by design*: E_aux now perturbs the
+# decoder input, and the segmentation loss backpropagates into the experts,
+# g_layer, and the level attention — the first stage where h_I receives
+# gradient. The inference path stays deployable: no mask -> prior mean mu_p
+# routes the experts.
+extends: isic2018_fuse.yaml
+
+experiment:
+  name: phase_b_isic2018_moe
+  output_root: runs
+
+model:
+  name: phase_b_moe
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: true
+  use_lpeg: true
+  moe_num_experts: 4
+  moe_top_k_ratio: 0.5
+  freeze_backbone: true
+
+  # Phase B additions (fuse stage).
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt
+  freeze_shape_teacher: true
+
+  # Phase B additions (router stage).
+  latent_dim: 64
+  num_experts: 4
+  active_experts: 2
+  stochastic: true
+
+  # Phase B additions (enhancement stage).
+  expert_hidden_ratio: 4
+
+task:
+  name: phase_b_moe
+  lambda_latent: 0.1
+  lambda_balance: 0.01
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

@@ -7,7 +7,9 @@ and the model can form h_q = [h_I ; h_M].
 The loss is still the segmentation loss. At the fuse stage there is no
 posterior yet, so nothing trains h_I: the descriptor and its level attention
 receive no gradient until the posterior q(z | I, M) and its KL/routing terms
-land in the next stage. `strict_fuse` therefore defaults to True so a run that
+land in the router stage (`phase_b_router`), and the segmentation loss
+itself only reaches them through the enhancement stage (`phase_b_moe`).
+`strict_fuse` therefore defaults to True so a run that
 silently stopped producing h_q fails loudly instead of quietly degrading into
 an ordinary MoE-SAM run.
 """

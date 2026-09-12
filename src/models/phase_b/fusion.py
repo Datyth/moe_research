@@ -4,6 +4,7 @@ This is where the image-only routing descriptor meets the privileged shape
 latent. Everything downstream of this point (the posterior q(z | I, M), the
 Top-K routing it induces, and the hierarchical enhancement) consumes h_q; at
 inference the h_M half disappears and the prior p(z | I) reads h_I alone.
+See `moe_enhancement` for the stage that consumes the routing downstream of h_q.
 """
 
 from __future__ import annotations

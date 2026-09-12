@@ -6,7 +6,8 @@ posterior, the deployable prior, and the shape-aware Top-K router on top —
 recording the routing decision and its KL / load-balancing terms in the
 diagnostics. It deliberately does **not** feed the routing back into any expert
 or the mask decoder, so the segmentation output is bit-identical to the fuse
-model; wiring experts is the next stage.
+model; the stage that wires the routing into experts and the decoder is
+``phase_b_moe`` (``PhaseBMoEStage``).
 
 Two paths, decided by whether the ground-truth mask is available:
 

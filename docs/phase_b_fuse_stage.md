@@ -2,10 +2,10 @@
 
 Phase B kết hợp hai nhánh để tạo biểu diễn định tuyến đặc quyền
 `h_q = [h_I ; h_M]`. Đây là mốc "completely fuse stage" trong proposal.
-Posterior `q(z | I, M)`, prior `p(z | I)` và Top-K routing **đã được triển
-khai ở giai đoạn kế tiếp** — xem
-[`docs/phase_b_router.md`](phase_b_router.md); hierarchical enhancement
-và việc nối expert vẫn là bước sau.
+Posterior `q(z | I, M)`, prior `p(z | I)` và Top-K routing được triển khai ở
+giai đoạn kế — xem [`docs/phase_b_router.md`](phase_b_router.md); expert
+enhancement và việc tiêm vào decoder ở
+[`docs/phase_b_moe_stage.md`](phase_b_moe_stage.md).
 
 ```
 I --> SAM ViT-B (MoE-SAM, E3) --> F^(l), l ∈ {3,6,9,12} --> h_I  ┐

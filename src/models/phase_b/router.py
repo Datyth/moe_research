@@ -12,8 +12,8 @@ routes patch tokens; this one selects which shape experts an object activates.
     pi     = renormalize(pi_bar over K_b)               (sparse, sums to 1)
 
 Only the ``k_e`` selected experts carry non-zero probability; the rest are zero.
-This module stops at producing ``pi`` and ``K_b`` — wiring them into experts is a
-later stage.
+This module stops at producing ``pi`` and ``K_b``; the enhancement stage
+(``moe_enhancement``) is what consumes them.
 """
 
 from __future__ import annotations

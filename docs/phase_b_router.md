@@ -7,8 +7,9 @@ giờ đây trên `h_q` có posterior đặc quyền `q(z | I, M)`, prior triể
 và level attention của nó.
 
 Router **chưa được nối vào expert nào**: quyết định định tuyến chỉ được ghi
-vào diagnostics. Nối `pi`/`K_b` vào shape expert và hierarchical enhancement
-(dùng `X^(l)`) là giai đoạn kế tiếp.
+vào diagnostics. Việc nối `pi`/`K_b` vào shape expert và hierarchical
+enhancement (dùng `X^(l)`) được triển khai ở giai đoạn kế tiếp — xem
+[`docs/phase_b_moe_stage.md`](phase_b_moe_stage.md).
 
 ```
 training (mask có sẵn — privileged):
@@ -254,6 +255,7 @@ Chưa có run tham chiếu — đây là việc còn thiếu duy nhất. Khi ch�
 - `h_I` bắt đầu nhận gradient — quan sát qua `val_level_weight_entropy`
   lệch dần khỏi `log(4)` sau vài epoch (điều fuse stage không bao giờ làm).
 
-Sau đó là giai đoạn nối expert: cấp `pi`/`K_b` cho shape expert trên
-`X^(l)` (hierarchical enhancement) — lúc đó output của router mới ảnh
-hưởng đến segmentation.
+Giai đoạn nối expert đã được triển khai — xem
+[`docs/phase_b_moe_stage.md`](phase_b_moe_stage.md): `pi`/`K_b` điều khiển
+shape expert trên `X^(l)` (hierarchical enhancement), kết quả tiêm residually
+vào SAM decoder, và từ đó output của router ảnh hưởng đến segmentation.

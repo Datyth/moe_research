@@ -21,7 +21,7 @@ REQUIRED_SECTIONS = (
     "training",
 )
 EXPERIMENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
-SUPPORTED_TASKS = ("segmentation", "phase_b_fuse", "phase_b_router")
+SUPPORTED_TASKS = ("segmentation", "phase_b_fuse", "phase_b_router", "phase_b_moe")
 # Model fields naming a file on disk; resolved against the project root so a
 # config stays runnable from any working directory.
 MODEL_PATH_FIELDS = ("checkpoint", "shape_teacher_checkpoint")
@@ -221,10 +221,10 @@ def resolve_experiment_config(
         raise ValueError(
             f"task.name must be one of: {', '.join(sorted(SUPPORTED_TASKS))}."
         )
-    # Router-stage loss weights. Defaulted here (not in the task class) so
-    # the resolved config — and therefore every saved run folder — always
+    # Router/MoE-stage loss weights. Defaulted here (not in the task class)
+    # so the resolved config — and therefore every saved run folder — always
     # records the weights a training run actually used.
-    if task_config["name"] == "phase_b_router":
+    if task_config["name"] in ("phase_b_router", "phase_b_moe"):
         task_config.setdefault("lambda_latent", 0.1)
         task_config.setdefault("lambda_balance", 0.01)
         task_config["lambda_latent"] = _positive_float(
