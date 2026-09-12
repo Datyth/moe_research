@@ -3,6 +3,7 @@
 from .base import Task, TaskStepOutput
 from .mask_reconstruction import MaskReconstructionTask
 from .phase_b_fuse import PhaseBFuseTask
+from .phase_b_router import PhaseBRouterTask
 from .segmentation import SegmentationTask
 
 __all__ = [
@@ -10,5 +11,6 @@ __all__ = [
     "TaskStepOutput",
     "MaskReconstructionTask",
     "PhaseBFuseTask",
+    "PhaseBRouterTask",
     "SegmentationTask",
 ]
