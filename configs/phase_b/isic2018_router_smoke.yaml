@@ -1,0 +1,14 @@
+# Fast 1-epoch sanity check for the Phase B router stage.
+extends: isic2018_router.yaml
+
+experiment:
+  name: phase_b_isic2018_router_smoke
+
+scheduler:
+  name: none
+
+training:
+  epochs: 1
+  batch_size: 4
+  num_workers: 4
+  gradient_clip_norm: null

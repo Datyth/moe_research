@@ -385,6 +385,46 @@ class TestTaskSection(unittest.TestCase):
             resolved = load_experiment_config(path, project_root=root)
             self.assertEqual(resolved["task"]["name"], "phase_b_fuse")
 
+    def test_phase_b_router_task_is_accepted_with_default_weights(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "phase_b_router"}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertEqual(resolved["task"]["name"], "phase_b_router")
+            self.assertAlmostEqual(resolved["task"]["lambda_latent"], 0.1)
+            self.assertAlmostEqual(resolved["task"]["lambda_balance"], 0.01)
+
+    def test_phase_b_router_explicit_weights_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {
+                "name": "phase_b_router",
+                "lambda_latent": 0.05,
+                "lambda_balance": 0.02,
+            }
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            resolved = load_experiment_config(path, project_root=root)
+            self.assertAlmostEqual(resolved["task"]["lambda_latent"], 0.05)
+            self.assertAlmostEqual(resolved["task"]["lambda_balance"], 0.02)
+
+    def test_negative_router_weight_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture = ExperimentFixture(root)
+            config = fixture.raw_config()
+            config["task"] = {"name": "phase_b_router", "lambda_latent": -0.1}
+            path = root / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            with self.assertRaises(ValueError):
+                load_experiment_config(path, project_root=root)
+
     def test_unknown_task_name_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

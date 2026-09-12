@@ -1,9 +1,11 @@
 # Phase B — fuse stage
 
 Phase B kết hợp hai nhánh để tạo biểu diễn định tuyến đặc quyền
-`h_q = [h_I ; h_M]`. Đây là mốc "completely fuse stage" trong proposal;
-posterior `q(z | I, M)`, Top-K routing và hierarchical enhancement là bước kế
-tiếp, **chưa** nằm trong tài liệu này.
+`h_q = [h_I ; h_M]`. Đây là mốc "completely fuse stage" trong proposal.
+Posterior `q(z | I, M)`, prior `p(z | I)` và Top-K routing **đã được triển
+khai ở giai đoạn kế tiếp** — xem
+[`docs/phase_b_router.md`](phase_b_router.md); hierarchical enhancement
+và việc nối expert vẫn là bước sau.
 
 ```
 I --> SAM ViT-B (MoE-SAM, E3) --> F^(l), l ∈ {3,6,9,12} --> h_I  ┐
@@ -35,8 +37,11 @@ Code tương ứng:
 
 ## 2. Điều cần biết trước khi chạy
 
-**`h_I` chưa được huấn luyện.** Ở mốc fuse stage chưa có posterior nên không
-có loss nào tác động lên `h_I` hay level attention; gradient của chúng bằng 0.
+**`h_I` chưa được huấn luyện — riêng ở fuse stage.** Từ mốc router
+(`phase_b_router`, xem [`docs/phase_b_router.md`](phase_b_router.md))
+trở đi, KL và load-balance loss bắt đầu tác động lên `h_I` và level
+attention. Riêng tại mốc fuse stage này chưa có posterior nên không có
+loss nào tác động lên `h_I` hay level attention; gradient của chúng bằng 0.
 Hệ quả:
 
 - `val_level_weight_entropy` sẽ đứng yên ở `log(4) ≈ 1.386` (phân bố đều).

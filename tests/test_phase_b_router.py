@@ -210,5 +210,159 @@ class TestPhaseBRouterStageModel(unittest.TestCase):
         self.assertEqual(infer_out.diagnostics["phase_b_router"].source, "prior")
 
 
+class TestPhaseBRouterTask(unittest.TestCase):
+    """The task must add KL and load-balance to the segmentation loss."""
+
+    class RecordingModel(torch.nn.Module):
+        def __init__(self, *, emit_router: bool = True):
+            super().__init__()
+            self.projection = torch.nn.Conv2d(3, 1, kernel_size=1)
+            self.emit_router = emit_router
+            self.received_masks = None
+
+        def forward(self, images, masks=None, **kwargs):
+            from src.models.base import SegmentationOutput
+            from src.models.phase_b import FuseStageOutput, PhaseBRouterHead
+
+            self.received_masks = masks
+            batch_size = images.shape[0]
+            diagnostics = {
+                "level_weights": torch.full((batch_size, 4), 0.25),
+            }
+            if masks is not None:
+                # The real router stage emits both diagnostics (it extends the
+                # fuse stage); strict_fuse is inherited and still on, so the
+                # mock must emit fuse_stage even when emit_router=False.
+                diagnostics["fuse_stage"] = FuseStageOutput(
+                    fused=torch.zeros(batch_size, 512),
+                    image_descriptor=torch.zeros(batch_size, 256),
+                    shape_latent=torch.zeros(batch_size, 256),
+                    level_weights=diagnostics["level_weights"],
+                    level_tokens=(),
+                )
+            if self.emit_router and masks is not None:
+                torch.manual_seed(7)  # a fixed draw so the test is deterministic
+                head = PhaseBRouterHead(
+                    posterior_head=GaussianParameterHead(
+                        in_dim=512, latent_dim=8
+                    ),
+                    prior_head=GaussianParameterHead(in_dim=256, latent_dim=8),
+                    router=TopKRouter(latent_dim=8, num_experts=4, active_experts=2),
+                )
+                diagnostics["phase_b_router"] = head(
+                    torch.zeros(batch_size, 256),
+                    torch.zeros(batch_size, 512),
+                    sample=True,
+                )
+            return SegmentationOutput(
+                logits=self.projection(images),
+                diagnostics=diagnostics,
+            )
+
+    @staticmethod
+    def batch(batch_size: int = 2):
+        return {
+            "image": torch.rand(batch_size, 3, 16, 16),
+            "mask": torch.randint(0, 2, (batch_size, 1, 16, 16)).float(),
+        }
+
+    @staticmethod
+    def make_task(**kwargs):
+        from src.tasks import PhaseBRouterTask
+
+        return PhaseBRouterTask(criterion=torch.nn.BCEWithLogitsLoss(), **kwargs)
+
+    def test_training_step_adds_the_routing_terms_to_the_loss(self):
+        model = self.RecordingModel()
+        batch = self.batch()
+
+        reference = self.make_task(
+            lambda_latent=0.0, lambda_balance=0.0
+        ).training_step(model, batch, torch.device("cpu"))
+        full = self.make_task().training_step(model, batch, torch.device("cpu"))
+
+        self.assertIsNotNone(model.received_masks)
+        self.assertGreater(
+            float(full.loss.detach()), float(reference.loss.detach())
+        )
+
+    def test_training_step_passes_the_ground_truth_mask_to_the_model(self):
+        model = self.RecordingModel()
+        batch = self.batch()
+        self.make_task().training_step(model, batch, torch.device("cpu"))
+        torch.testing.assert_close(model.received_masks, batch["mask"])
+
+    def test_evaluation_reports_segmentation_and_routing_metrics(self):
+        output = self.make_task().evaluation_step(
+            self.RecordingModel(), self.batch(), torch.device("cpu")
+        )
+        self.assertEqual(
+            set(output.metrics),
+            {
+                "dice",
+                "iou",
+                "hd",
+                "hd95",
+                "assd",
+                "boundary_f1",
+                "level_weight_entropy",
+                "level_weight_max",
+                "expert_usage_entropy",
+                "latent_kl",
+                "load_balance",
+            },
+        )
+
+    def test_a_model_that_produces_no_router_diagnostic_fails_loudly(self):
+        model = self.RecordingModel(emit_router=False)
+        with self.assertRaises(ValueError):
+            self.make_task().training_step(
+                model, self.batch(), torch.device("cpu")
+            )
+
+    def test_strict_router_can_be_disabled(self):
+        model = self.RecordingModel(emit_router=False)
+        task = self.make_task(strict_router=False)
+        task.training_step(model, self.batch(), torch.device("cpu"))
+
+    def test_negative_loss_weights_are_rejected(self):
+        with self.assertRaises(ValueError):
+            self.make_task(lambda_latent=-0.1)
+
+
+class TestRouterTaskWiring(unittest.TestCase):
+    """The experiment builder must construct the router task with its weights."""
+
+    def test_registry_contains_router_task(self):
+        import src.experiment as experiment_module
+        from src.tasks import PhaseBRouterTask
+
+        self.assertIn("phase_b_router", experiment_module.TASK_REGISTRY)
+        self.assertIs(
+            experiment_module.TASK_REGISTRY["phase_b_router"],
+            PhaseBRouterTask,
+        )
+
+    def test_registry_contains_router_model(self):
+        from src.models.registry import MODEL_REGISTRY
+
+        import src.models  # noqa: F401  (populates the registry)
+
+        self.assertIn("phase_b_router", MODEL_REGISTRY)
+
+    def test_router_task_accepts_loss_weight_kwargs(self):
+        # The builder passes lambda_latent/lambda_balance as constructor
+        # kwargs; this pins that contract so it cannot silently drift.
+        from src.tasks import PhaseBRouterTask
+
+        task = PhaseBRouterTask(
+            criterion=torch.nn.BCEWithLogitsLoss(),
+            lambda_latent=0.05,
+            lambda_balance=0.005,
+        )
+        self.assertEqual(task.lambda_latent, 0.05)
+        self.assertEqual(task.lambda_balance, 0.005)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,42 @@
+# Phase B, router stage: fuse stage + privileged posterior/prior + Top-K router.
+#
+# Extends the fuse config: the model is now `phase_b_router` — on top of the
+# fuse stage it adds
+#
+#   q(z|I,M)  posterior from h_q (training-time, sees the ground-truth mask)
+#   p(z|I)    prior from h_I alone (deployable, used at inference)
+#   Top-K     shape-aware instance-level router over K=4 experts, k_e=2 active
+#
+# The routing decision is NOT yet wired into any expert or the mask decoder:
+# it is recorded as the `phase_b_router` diagnostic and trained through its
+# own losses only, so segmentation quality must still match the fuse stage.
+# That equality is the point of this config: it verifies the router machinery
+# is wired without disturbing the baseline.
+#
+# New loss terms (see docs/phase_b_router.md):
+#   L = L_seg + lambda_latent * KL(sg[q] || p) + lambda_balance * L_bal
+# This is the first stage where h_I receives gradient (via the KL and the
+# load-balance term), so the bit-for-bit equality with E3 ends here.
+#
+# `model.shape_teacher_checkpoint` must point at a Phase-A run's best.pt (see
+# docs/phase_b_fuse_stage.md section 3). Train one with
+# configs/phase_a/isic2018_s0_small_cnn_10ep.yaml.
+extends: isic2018_fuse.yaml
+
+experiment:
+  name: phase_b_isic2018_router
+
+model:
+  name: phase_b_router
+
+  # Router additions (defaults shown; listed for the config to be self-describing).
+  latent_dim: 64          # d_z
+  num_experts: 4          # K
+  active_experts: 2       # k_e
+  std_floor: 1.0e-4       # sigma floor: keeps the KL finite
+  stochastic: true        # true: train on z_q ~ rsample; false: deterministic z_q = mu_q ablation
+
+task:
+  name: phase_b_router
+  lambda_latent: 0.1      # weight on KL(sg[q] || p): pulls the prior toward the posterior
+  lambda_balance: 0.01    # weight on L_bal: keeps expert load from collapsing
