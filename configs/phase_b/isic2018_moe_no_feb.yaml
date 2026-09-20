@@ -1,0 +1,45 @@
+# Phase B Shape-guided MoE without the legacy MoE-FEB path.
+#
+# This config intentionally extends the common ISIC2018 settings directly so
+# the inactive MoE-FEB-only keys (moe_num_experts and moe_top_k_ratio) are not
+# inherited. The Phase B posterior, Top-K Shape-MoE, hierarchical fusion, LPEG,
+# and SAM decoder remain enabled.
+extends: ../isic2018_common.yaml
+
+experiment:
+  name: phase_b_isic2018_moe_no_feb
+  output_root: runs
+
+model:
+  name: phase_b_moe
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: true
+  freeze_backbone: true
+
+  # Phase B fuse stage.
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+
+  # Phase B posterior and Shape-MoE router.
+  latent_dim: 64
+  num_experts: 4
+  active_experts: 2
+  stochastic: true
+
+  # Phase B hierarchical expert enhancement.
+  expert_hidden_ratio: 4
+
+task:
+  name: phase_b_moe
+  lambda_latent: 0.0
+  lambda_balance: 0.01
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9
