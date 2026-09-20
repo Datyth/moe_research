@@ -33,6 +33,9 @@ from src.losses import BCEDiceLoss, build_loss, register_loss
 from src.models import build_model
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 class ExperimentFixture:
     def __init__(self, root: Path):
         self.root = root
@@ -454,3 +457,81 @@ class TestTaskSection(unittest.TestCase):
                 resolved["model"]["shape_teacher_checkpoint"],
                 str(root / "runs" / "phase_a" / "best.pt"),
             )
+
+
+class TestPhaseBNoFebConfig(unittest.TestCase):
+    """The no-FEB run changes only the explicitly requested Phase B knobs."""
+
+    def test_no_feb_config_preserves_baseline_hyperparameters(self):
+        original = load_experiment_config(
+            PROJECT_ROOT / "configs" / "phase_b" / "isic2018_moe.yaml",
+            project_root=PROJECT_ROOT,
+        )
+        no_feb = load_experiment_config(
+            PROJECT_ROOT / "configs" / "phase_b" / "isic2018_moe_no_feb.yaml",
+            project_root=PROJECT_ROOT,
+        )
+
+        self.assertEqual(
+            no_feb["experiment"]["name"], "phase_b_isic2018_moe_no_feb"
+        )
+        self.assertEqual(
+            no_feb["experiment"]["output_root"],
+            original["experiment"]["output_root"],
+        )
+        for section in (
+            "seed",
+            "dataset",
+            "loss",
+            "optimizer",
+            "scheduler",
+            "training",
+        ):
+            self.assertEqual(no_feb[section], original[section])
+
+        self.assertTrue(original["model"]["use_moe"])
+        self.assertIn("moe_num_experts", original["model"])
+        self.assertIn("moe_top_k_ratio", original["model"])
+        self.assertFalse(no_feb["model"]["use_moe"])
+        self.assertTrue(no_feb["model"]["use_lpeg"])
+        self.assertNotIn("moe_num_experts", no_feb["model"])
+        self.assertNotIn("moe_top_k_ratio", no_feb["model"])
+
+        changed_model_keys = {
+            "use_moe",
+            "moe_num_experts",
+            "moe_top_k_ratio",
+            "shape_teacher_checkpoint",
+        }
+        original_unchanged = {
+            key: value
+            for key, value in original["model"].items()
+            if key not in changed_model_keys
+        }
+        no_feb_unchanged = {
+            key: value
+            for key, value in no_feb["model"].items()
+            if key not in changed_model_keys
+        }
+        self.assertEqual(no_feb_unchanged, original_unchanged)
+
+        expected_teacher = (
+            Path("~/projects/project_01/nhan/moe_research/runs/")
+            / "phase_a_s0_small_cnn_10ep"
+            / "20260910T185518Z_seed-42"
+            / "best.pt"
+        ).expanduser().resolve()
+        self.assertEqual(
+            no_feb["model"]["shape_teacher_checkpoint"],
+            str(expected_teacher),
+        )
+        self.assertTrue(no_feb["model"]["freeze_shape_teacher"])
+        self.assertEqual(no_feb["model"]["latent_dim"], 64)
+        self.assertEqual(no_feb["model"]["num_experts"], 4)
+        self.assertEqual(no_feb["model"]["active_experts"], 2)
+        self.assertTrue(no_feb["model"]["stochastic"])
+        self.assertEqual(no_feb["model"]["expert_hidden_ratio"], 4)
+
+        self.assertEqual(original["task"]["lambda_latent"], 0.1)
+        self.assertEqual(no_feb["task"]["lambda_latent"], 0.0)
+        self.assertEqual(no_feb["task"]["lambda_balance"], 0.01)

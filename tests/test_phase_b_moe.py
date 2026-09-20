@@ -248,7 +248,12 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
         from src.models.phase_b import PhaseBMoEStage
 
         torch.manual_seed(0)
-        model = PhaseBMoEStage(image_size=256, freeze_backbone=True)
+        model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+        )
         model.eval()
         images = torch.randn(1, 3, 256, 256)
         masks = torch.randint(0, 2, (1, 1, 256, 256)).float()
@@ -257,6 +262,11 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
             out = model(images, masks=masks)
 
         diagnostics = out.diagnostics
+        network = model.backbone.network
+        self.assertFalse(network.use_moe)
+        self.assertFalse(hasattr(network, "ExpertChoiceTokenMoE"))
+        self.assertIsNone(diagnostics["moe_expert_indices"])
+        self.assertIn("phase_b_router", diagnostics)
         self.assertIn("phase_b_moe", diagnostics)
         stage = diagnostics["phase_b_moe"]
         self.assertGreater(float(stage.aux_norm_ratio.mean()), 0.0)
@@ -267,22 +277,25 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
         from src.models.phase_b import PhaseBMoEStage
 
         torch.manual_seed(0)
-        model = PhaseBMoEStage(image_size=256, freeze_backbone=True)
+        model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+        )
         model.train()
         images = torch.randn(1, 3, 256, 256)
         masks = torch.randint(0, 2, (1, 1, 256, 256)).float()
 
         model(images, masks=masks).logits.sum().backward()
         # Enhancement received gradient...
-        expert = model.enhancement.experts.experts[0]
         self.assertTrue(
-            expert.fc1.weight.grad is None
-            or float(expert.fc1.weight.grad.abs().sum()) > 0.0
-            or any(
+            any(
                 e.fc1.weight.grad is not None
                 and float(e.fc1.weight.grad.abs().sum()) > 0.0
                 for e in model.enhancement.experts.experts
-            )
+            ),
+            "Segmentation output must backpropagate into a routed Shape expert.",
         )
         # ...but the frozen ViT blocks did not.
         for name, param in model.backbone.network.image_encoder.named_parameters():
@@ -294,7 +307,12 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
         from src.models.phase_b import PhaseBMoEStage
 
         torch.manual_seed(0)
-        model = PhaseBMoEStage(image_size=256, freeze_backbone=True)
+        model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+        )
         model.eval()
         images = torch.randn(1, 3, 256, 256)
 
