@@ -21,7 +21,13 @@ REQUIRED_SECTIONS = (
     "training",
 )
 EXPERIMENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
-SUPPORTED_TASKS = ("segmentation", "phase_b_fuse", "phase_b_router", "phase_b_moe")
+SUPPORTED_TASKS = (
+    "segmentation",
+    "phase_b_a1_no_expert",
+    "phase_b_fuse",
+    "phase_b_router",
+    "phase_b_moe",
+)
 # Model fields naming a file on disk; resolved against the project root so a
 # config stays runnable from any working directory.
 MODEL_PATH_FIELDS = ("checkpoint", "shape_teacher_checkpoint")

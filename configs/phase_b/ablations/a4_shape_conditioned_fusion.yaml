@@ -1,0 +1,8 @@
+# A4: Gaussian routing with shape-conditioned fusion before sparse experts.
+extends: ../isic2018_moe_no_feb.yaml
+
+experiment:
+  name: phase_b_a4_shape_conditioned_fusion
+
+model:
+  name: phase_b_a4_shape_conditioned

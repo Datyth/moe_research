@@ -308,8 +308,15 @@ class TestPhaseBRouterTask(unittest.TestCase):
                 "level_weight_entropy",
                 "level_weight_max",
                 "expert_usage_entropy",
+                "expert_usage_fraction_0",
+                "expert_usage_fraction_1",
+                "expert_usage_fraction_2",
+                "expert_usage_fraction_3",
+                "routing_max_probability",
+                "routing_top1_top2_margin",
                 "latent_kl",
                 "load_balance",
+                "load_balance_loss",
             },
         )
 

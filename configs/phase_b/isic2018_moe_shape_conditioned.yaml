@@ -1,0 +1,8 @@
+# Phase B ablation: shape-conditioned level fusion before sparse experts.
+extends: isic2018_moe_no_feb.yaml
+
+experiment:
+  name: phase_b_isic2018_moe_shape_conditioned
+
+model:
+  enhancement_mode: shape_conditioned

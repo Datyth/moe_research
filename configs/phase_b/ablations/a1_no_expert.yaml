@@ -1,0 +1,11 @@
+# A1: multi-level weighted residual enhancement without Shape-MoE.
+extends: ../isic2018_no_moe.yaml
+
+experiment:
+  name: phase_b_a1_no_expert
+
+model:
+  name: phase_b_a1_no_expert
+
+task:
+  name: phase_b_a1_no_expert

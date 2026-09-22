@@ -11,10 +11,12 @@ import unittest
 import torch
 
 from src.models.phase_b import (
+    EnhancementStageOutput,
     ExpertBank,
     FeedForwardExpert,
     HierarchicalMoEEnhancement,
     LayerPreferenceScorer,
+    ShapeConditionedFusionMoEEnhancement,
 )
 
 
@@ -239,6 +241,170 @@ class TestHierarchicalMoEEnhancement(unittest.TestCase):
             module(tokens, pools, z, pi, K_b)
 
 
+class TestShapeConditionedFusionMoEEnhancement(unittest.TestCase):
+    def _routing(self, batch_size: int = 3):
+        indices = torch.tensor([[0, 2]] * batch_size)
+        probs = torch.zeros(batch_size, NUM_EXPERTS)
+        probs.scatter_(1, indices, 0.5)
+        return probs, indices
+
+    def _module(self):
+        return ShapeConditionedFusionMoEEnhancement(
+            embed_dim=EMBED_DIM,
+            num_experts=NUM_EXPERTS,
+            num_levels=NUM_LEVELS,
+            latent_dim=LATENT_DIM,
+        )
+
+    def _run(self, batch_size: int = 3):
+        torch.manual_seed(17)
+        module = self._module()
+        tokens = level_tokens(batch_size)
+        latent = torch.randn(batch_size, LATENT_DIM)
+        probs, indices = self._routing(batch_size)
+        return module, tokens, module(tokens, latent, probs, indices)
+
+    def test_alpha_and_token_shapes(self):
+        module, tokens, out = self._run()
+        self.assertEqual(module.g_fuse[0].in_features, EMBED_DIM + LATENT_DIM)
+        self.assertEqual(module.g_fuse[0].out_features, 64)
+        self.assertEqual(tuple(out.layer_weights.shape), (3, NUM_LEVELS))
+        self.assertTrue(torch.isfinite(out.layer_weights).all())
+        torch.testing.assert_close(
+            out.layer_weights.sum(dim=1), torch.ones(3)
+        )
+        self.assertEqual(
+            tuple(out.fused_tokens.shape), (3, PATCHES, EMBED_DIM)
+        )
+        self.assertEqual(
+            tuple(out.enhanced_fused_tokens.shape),
+            (3, PATCHES, EMBED_DIM),
+        )
+        expected = sum(
+            out.layer_weights[:, level].view(3, 1, 1) * tokens[level]
+            for level in range(NUM_LEVELS)
+        )
+        torch.testing.assert_close(out.fused_tokens, expected)
+
+    def test_zero_expert_outputs_leave_fused_tokens_unchanged(self):
+        module = self._module()
+        for parameter in module.experts.parameters():
+            torch.nn.init.zeros_(parameter)
+        tokens = level_tokens(2)
+        latent = torch.randn(2, LATENT_DIM)
+        probs, indices = self._routing(2)
+        out = module(tokens, latent, probs, indices)
+        torch.testing.assert_close(
+            out.enhanced_fused_tokens, out.fused_tokens
+        )
+
+    def test_only_selected_experts_run_and_receive_gradient(self):
+        module = self._module()
+        call_counts = [0] * NUM_EXPERTS
+
+        def counting_hook(expert_id):
+            def hook(_module, _inputs, _output):
+                call_counts[expert_id] += 1
+
+            return hook
+
+        handles = [
+            expert.register_forward_hook(counting_hook(expert_id))
+            for expert_id, expert in enumerate(module.experts.experts)
+        ]
+        tokens = level_tokens(3)
+        latent = torch.randn(3, LATENT_DIM)
+        probs, indices = self._routing(3)
+        try:
+            out = module(tokens, latent, probs, indices)
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        out.enhanced_fused_tokens.sum().backward()
+        self.assertEqual(call_counts, [1, 0, 1, 0])
+        for expert_id, expert in enumerate(module.experts.experts):
+            gradient = expert.fc1.weight.grad
+            if expert_id in (0, 2):
+                self.assertIsNotNone(gradient)
+                self.assertGreater(float(gradient.abs().sum()), 0.0)
+            else:
+                self.assertTrue(
+                    gradient is None or float(gradient.abs().sum()) == 0.0
+                )
+
+    def test_fusion_scorer_receives_gradient(self):
+        module, _, out = self._run(batch_size=2)
+        out.enhanced_fused_tokens.square().mean().backward()
+        for layer_index in (0, 2):
+            gradient = module.g_fuse[layer_index].weight.grad
+            self.assertIsNotNone(gradient)
+            self.assertGreater(float(gradient.abs().sum()), 0.0)
+
+    def test_invalid_input_shapes_are_rejected(self):
+        module = self._module()
+        tokens = level_tokens(2)
+        latent = torch.randn(2, LATENT_DIM)
+        probs, indices = self._routing(2)
+
+        with self.assertRaises(ValueError):
+            module(tokens[:-1], latent, probs, indices)
+        wrong_channels = tokens[:-1] + (
+            torch.randn(2, PATCHES, EMBED_DIM - 1),
+        )
+        with self.assertRaises(ValueError):
+            module(wrong_channels, latent, probs, indices)
+        with self.assertRaises(ValueError):
+            module(tokens, torch.randn(2, LATENT_DIM - 1), probs, indices)
+        with self.assertRaises(ValueError):
+            module(tokens, latent, probs[:, :-1], indices)
+        with self.assertRaises(ValueError):
+            module(tokens, latent, probs, indices[:1])
+        with self.assertRaises(ValueError):
+            module(tokens, latent, probs, indices.float())
+        with self.assertRaises(ValueError):
+            module(
+                tokens,
+                latent,
+                probs,
+                torch.zeros(2, NUM_EXPERTS + 1, dtype=torch.long),
+            )
+
+    def test_task_logs_shape_fusion_entropy_separately(self):
+        from src.tasks.phase_b_moe import PhaseBMoETask
+
+        alpha = torch.full((2, NUM_LEVELS), 1.0 / NUM_LEVELS)
+        stage = EnhancementStageOutput(
+            layer_weights=alpha,
+            expert_layer_weights=None,
+            shape_fusion_layer_weights=alpha,
+            aux_norm_ratio=torch.ones(2),
+        )
+        metrics = PhaseBMoETask._enhancement_metrics(stage)
+        self.assertIn("shape_fusion_layer_weight_entropy", metrics)
+        self.assertNotIn("fused_level_weight_entropy", metrics)
+
+        hierarchical_stage = EnhancementStageOutput(
+            layer_weights=alpha,
+            expert_layer_weights=torch.ones(2, ACTIVE, NUM_LEVELS),
+            shape_fusion_layer_weights=None,
+            aux_norm_ratio=torch.ones(2),
+        )
+        hierarchical_metrics = PhaseBMoETask._enhancement_metrics(
+            hierarchical_stage
+        )
+        self.assertIn("fused_level_weight_entropy", hierarchical_metrics)
+        self.assertNotIn(
+            "shape_fusion_layer_weight_entropy", hierarchical_metrics
+        )
+
+    def test_invalid_enhancement_mode_is_rejected_before_model_build(self):
+        from src.models.phase_b import PhaseBMoEStage
+
+        with self.assertRaisesRegex(ValueError, "enhancement_mode"):
+            PhaseBMoEStage(enhancement_mode="unknown")
+
+
 @unittest.skipUnless(
     os.environ.get("RUN_BACKBONE_TESTS") == "1",
     "Set RUN_BACKBONE_TESTS=1 to build the ViT-B backbone in this test.",
@@ -269,6 +435,10 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
         self.assertIn("phase_b_router", diagnostics)
         self.assertIn("phase_b_moe", diagnostics)
         stage = diagnostics["phase_b_moe"]
+        self.assertEqual(model.enhancement_mode, "hierarchical")
+        self.assertIsInstance(model.enhancement, HierarchicalMoEEnhancement)
+        self.assertIsNotNone(stage.expert_layer_weights)
+        self.assertIsNone(stage.shape_fusion_layer_weights)
         self.assertGreater(float(stage.aux_norm_ratio.mean()), 0.0)
         # Full model outputs [B, num_classes, H, W] logits.
         self.assertEqual(out.logits.shape[-2:], (256, 256))
@@ -322,6 +492,109 @@ class TestPhaseBMoEStageModel(unittest.TestCase):
         self.assertEqual(out.diagnostics["phase_b_router"].source, "prior")
         self.assertIn("phase_b_moe", out.diagnostics)
 
+    def test_shape_conditioned_forward_backward_contract(self):
+        from src.models.phase_b import PhaseBMoEStage
+
+        torch.manual_seed(0)
+        model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+            enhancement_mode="shape_conditioned",
+        )
+        model.train()
+        images = torch.randn(1, 3, 256, 256)
+        masks = torch.randint(0, 2, (1, 1, 256, 256)).float()
+
+        out = model(images, masks=masks)
+        stage = out.diagnostics["phase_b_moe"]
+        router_stage = out.diagnostics["phase_b_router"]
+        alpha = stage.shape_fusion_layer_weights
+
+        self.assertEqual(model.enhancement_mode, "shape_conditioned")
+        self.assertIsInstance(
+            model.enhancement, ShapeConditionedFusionMoEEnhancement
+        )
+        self.assertFalse(model.backbone.network.use_moe)
+        self.assertFalse(
+            hasattr(model.backbone.network, "ExpertChoiceTokenMoE")
+        )
+        self.assertIsNone(out.diagnostics["moe_expert_indices"])
+        self.assertEqual(router_stage.source, "posterior")
+        self.assertIsNone(stage.expert_layer_weights)
+        self.assertIs(stage.layer_weights, alpha)
+        self.assertEqual(tuple(alpha.shape), (1, NUM_LEVELS))
+        torch.testing.assert_close(alpha.sum(dim=1), torch.ones(1))
+        self.assertGreater(float(stage.aux_norm_ratio.mean()), 0.0)
+        self.assertEqual(tuple(out.logits.shape), (1, 1, 256, 256))
+
+        out.logits.sum().backward()
+        for layer_index in (0, 2):
+            gradient = model.enhancement.g_fuse[layer_index].weight.grad
+            self.assertIsNotNone(gradient)
+            self.assertGreater(float(gradient.abs().sum()), 0.0)
+
+        selected = set(router_stage.routing.expert_indices.flatten().tolist())
+        for expert_id, expert in enumerate(model.enhancement.experts.experts):
+            gradient = expert.fc1.weight.grad
+            if expert_id in selected:
+                self.assertIsNotNone(gradient)
+                self.assertGreater(float(gradient.abs().sum()), 0.0)
+            else:
+                self.assertTrue(
+                    gradient is None or float(gradient.abs().sum()) == 0.0
+                )
+
+    def test_shape_conditioned_inference_routes_from_prior(self):
+        from src.models.phase_b import PhaseBMoEStage
+
+        torch.manual_seed(0)
+        model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+            enhancement_mode="shape_conditioned",
+        )
+        model.eval()
+
+        with torch.no_grad():
+            out = model(torch.randn(1, 3, 256, 256))
+
+        stage = out.diagnostics["phase_b_moe"]
+        self.assertEqual(out.diagnostics["phase_b_router"].source, "prior")
+        self.assertEqual(
+            tuple(stage.shape_fusion_layer_weights.shape), (1, NUM_LEVELS)
+        )
+        self.assertEqual(tuple(out.logits.shape), (1, 1, 256, 256))
+
+    def test_hierarchical_default_and_explicit_modes_are_strictly_compatible(self):
+        from src.models.phase_b import PhaseBMoEStage
+
+        default_model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+        )
+        explicit_model = PhaseBMoEStage(
+            image_size=256,
+            use_moe=False,
+            use_lpeg=True,
+            freeze_backbone=True,
+            enhancement_mode="hierarchical",
+        )
+
+        self.assertEqual(default_model.enhancement_mode, "hierarchical")
+        self.assertIsInstance(
+            default_model.enhancement, HierarchicalMoEEnhancement
+        )
+        self.assertEqual(
+            tuple(default_model.state_dict()),
+            tuple(explicit_model.state_dict()),
+        )
+        explicit_model.load_state_dict(default_model.state_dict(), strict=True)
 
 if __name__ == "__main__":
     unittest.main()

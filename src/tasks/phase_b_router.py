@@ -20,6 +20,7 @@ import torch
 from torch import nn
 
 from .base import TaskStepOutput
+from .phase_b_diagnostics import routing_metrics
 from .phase_b_fuse import PhaseBFuseTask
 
 
@@ -62,16 +63,7 @@ class PhaseBRouterTask(PhaseBFuseTask):
 
     @staticmethod
     def _routing_metrics(stage: Any) -> dict[str, torch.Tensor]:
-        """Expert-usage entropy: near log(K) means balanced, near 0 collapsed."""
-
-        probs = stage.routing.dense_probs.mean(dim=0)
-        entropy = -(probs.clamp_min(1e-9).log() * probs).sum()
-        metrics = {"expert_usage_entropy": entropy}
-        if stage.latent_kl is not None:
-            metrics["latent_kl"] = stage.latent_kl.detach()
-        if stage.balance is not None:
-            metrics["load_balance"] = stage.balance.detach()
-        return metrics
+        return routing_metrics(stage)
 
     def training_step(self, model: nn.Module, batch: Any, device: Any) -> TaskStepOutput:
         images, targets = self._prepare_batch(batch, device)

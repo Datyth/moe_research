@@ -24,6 +24,7 @@ import torch
 from torch import nn
 
 from .base import TaskStepOutput
+from .phase_b_diagnostics import enhancement_metrics
 from .phase_b_router import PhaseBRouterTask
 
 
@@ -66,20 +67,7 @@ class PhaseBMoETask(PhaseBRouterTask):
 
     @staticmethod
     def _enhancement_metrics(stage: Any) -> dict[str, torch.Tensor]:
-        """Enhancement contribution and fused level-weight behavior."""
-
-        metrics: dict[str, torch.Tensor] = {}
-        if stage is None:
-            return metrics
-        ratio = stage.aux_norm_ratio
-        if torch.is_tensor(ratio):
-            metrics["enhancement_aux_ratio"] = ratio.mean()
-        gamma = stage.layer_weights
-        if torch.is_tensor(gamma):
-            metrics["fused_level_weight_entropy"] = (
-                -(gamma.clamp_min(1e-9).log() * gamma).sum(dim=1).mean()
-            )
-        return metrics
+        return enhancement_metrics(stage)
 
     def training_step(self, model: nn.Module, batch: Any, device: Any) -> TaskStepOutput:
         images, targets = self._prepare_batch(batch, device)

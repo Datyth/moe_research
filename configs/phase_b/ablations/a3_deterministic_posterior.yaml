@@ -1,0 +1,8 @@
+# A3: A0 architecture with deterministic posterior mean during training.
+extends: ../isic2018_moe_no_feb.yaml
+
+experiment:
+  name: phase_b_a3_deterministic_posterior
+
+model:
+  stochastic: false

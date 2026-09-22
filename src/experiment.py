@@ -23,10 +23,17 @@ from src.engine import Trainer, TrainerConfig, evaluate
 from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
-from src.tasks import PhaseBFuseTask, PhaseBMoETask, PhaseBRouterTask, SegmentationTask
+from src.tasks import (
+    PhaseBA1NoExpertTask,
+    PhaseBFuseTask,
+    PhaseBMoETask,
+    PhaseBRouterTask,
+    SegmentationTask,
+)
 
 TASK_REGISTRY = {
     "segmentation": SegmentationTask,
+    "phase_b_a1_no_expert": PhaseBA1NoExpertTask,
     "phase_b_fuse": PhaseBFuseTask,
     "phase_b_router": PhaseBRouterTask,
     "phase_b_moe": PhaseBMoETask,

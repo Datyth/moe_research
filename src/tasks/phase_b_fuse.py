@@ -22,6 +22,7 @@ import torch
 from torch import nn
 
 from .base import TaskStepOutput
+from .phase_b_diagnostics import layer_fusion_metrics
 from .segmentation import SegmentationTask
 
 
@@ -69,21 +70,7 @@ class PhaseBFuseTask(SegmentationTask):
 
     @staticmethod
     def _level_weight_metrics(diagnostics: dict[str, Any]) -> dict[str, torch.Tensor]:
-        """Report how peaked the level attention is.
-
-        Entropy near log(L) means the router weights every SAM level equally
-        and the level attention has not specialized; near 0 means it collapsed
-        onto one level. Both are worth seeing during training.
-        """
-
-        weights = diagnostics.get("level_weights")
-        if weights is None:
-            return {}
-        entropy = -(weights.clamp_min(1e-9).log() * weights).sum(dim=1)
-        return {
-            "level_weight_entropy": entropy.mean(),
-            "level_weight_max": weights.max(dim=1).values.mean(),
-        }
+        return layer_fusion_metrics(diagnostics)
 
     def training_step(self, model: nn.Module, batch: Any, device: Any) -> TaskStepOutput:
         images, targets = self._prepare_batch(batch, device)

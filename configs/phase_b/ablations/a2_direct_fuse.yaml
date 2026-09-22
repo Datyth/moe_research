@@ -1,0 +1,34 @@
+# A2: direct privileged h_q routing, without posterior/prior Gaussian heads.
+extends: ../../isic2018_common.yaml
+
+experiment:
+  name: phase_b_a2_direct_fuse
+  output_root: runs
+
+model:
+  name: phase_b_a2_direct_fuse
+  image_size: 256
+  checkpoint: checkpoints/sam_vit_b_01ec64.pth
+  use_moe: false
+  use_lpeg: true
+  freeze_backbone: true
+
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+
+  num_experts: 4
+  active_experts: 2
+  expert_hidden_ratio: 4
+
+task:
+  name: phase_b_moe
+  lambda_latent: 0.0
+  lambda_balance: 0.01
+
+scheduler:
+  name: warmup_poly
+  warmup_steps: 250
+  power: 0.9

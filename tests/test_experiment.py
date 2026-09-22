@@ -535,3 +535,83 @@ class TestPhaseBNoFebConfig(unittest.TestCase):
         self.assertEqual(original["task"]["lambda_latent"], 0.1)
         self.assertEqual(no_feb["task"]["lambda_latent"], 0.0)
         self.assertEqual(no_feb["task"]["lambda_balance"], 0.01)
+
+
+class TestPhaseBShapeConditionedConfig(unittest.TestCase):
+    """The shape-conditioned config changes only mode and experiment name."""
+
+    def test_shape_conditioned_config_extends_no_feb_exactly(self):
+        no_feb = load_experiment_config(
+            PROJECT_ROOT / "configs" / "phase_b" / "isic2018_moe_no_feb.yaml",
+            project_root=PROJECT_ROOT,
+        )
+        shape_conditioned = load_experiment_config(
+            PROJECT_ROOT
+            / "configs"
+            / "phase_b"
+            / "isic2018_moe_shape_conditioned.yaml",
+            project_root=PROJECT_ROOT,
+        )
+
+        no_feb["experiment"]["name"] = (
+            "phase_b_isic2018_moe_shape_conditioned"
+        )
+        no_feb["model"]["enhancement_mode"] = "shape_conditioned"
+        self.assertEqual(shape_conditioned, no_feb)
+        self.assertFalse(shape_conditioned["model"]["use_moe"])
+        self.assertTrue(shape_conditioned["model"]["use_lpeg"])
+        self.assertEqual(shape_conditioned["model"]["levels"], [3, 6, 9, 12])
+        self.assertEqual(shape_conditioned["model"]["num_experts"], 4)
+        self.assertEqual(shape_conditioned["model"]["active_experts"], 2)
+        self.assertEqual(shape_conditioned["task"]["lambda_latent"], 0.0)
+        self.assertEqual(shape_conditioned["task"]["lambda_balance"], 0.01)
+
+
+class TestPhaseBNoMoEConfig(unittest.TestCase):
+    """No-MoE adds only multi-level enhancement to the E2 recipe."""
+
+    def test_no_moe_config_matches_e2_training_recipe(self):
+        e2 = load_experiment_config(
+            PROJECT_ROOT / "configs" / "isic2018_e2.yaml",
+            project_root=PROJECT_ROOT,
+        )
+        no_moe = load_experiment_config(
+            PROJECT_ROOT / "configs" / "phase_b" / "isic2018_no_moe.yaml",
+            project_root=PROJECT_ROOT,
+        )
+
+        for section in (
+            "seed",
+            "dataset",
+            "loss",
+            "optimizer",
+            "scheduler",
+            "training",
+            "task",
+        ):
+            self.assertEqual(no_moe[section], e2[section])
+        self.assertEqual(no_moe["experiment"]["output_root"], e2["experiment"]["output_root"])
+        self.assertEqual(no_moe["experiment"]["name"], "phase_b_isic2018_no_moe")
+
+        for key in (
+            "image_size",
+            "checkpoint",
+            "use_moe",
+            "use_lpeg",
+            "freeze_backbone",
+        ):
+            self.assertEqual(no_moe["model"][key], e2["model"][key])
+        self.assertEqual(no_moe["model"]["name"], "phase_b_no_moe")
+        self.assertEqual(no_moe["model"]["descriptor_dim"], 256)
+        self.assertEqual(no_moe["model"]["levels"], [3, 6, 9, 12])
+        self.assertEqual(no_moe["model"]["scoring_hidden_dim"], 64)
+        for forbidden_key in (
+            "shape_teacher_checkpoint",
+            "latent_dim",
+            "num_experts",
+            "active_experts",
+            "expert_hidden_ratio",
+            "moe_num_experts",
+            "moe_top_k_ratio",
+        ):
+            self.assertNotIn(forbidden_key, no_moe["model"])

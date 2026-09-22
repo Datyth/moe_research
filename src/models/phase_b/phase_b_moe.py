@@ -31,13 +31,18 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from ..base import SegmentationOutput
 from ..registry import register_model
-from ..esam._vendor.common import LayerNorm2d
 from .phase_b_router import PhaseBRouterStage
 from .moe_enhancement import HierarchicalMoEEnhancement
+from .shape_conditioned_enhancement import ShapeConditionedFusionMoEEnhancement
+from .ablations.common import (
+    build_enhancement_neck,
+    enhanced_level_norm,
+    token_norm,
+)
 
 
 @dataclass
@@ -45,14 +50,23 @@ class EnhancementStageOutput:
     """Diagnostics for the enhancement stage."""
 
     layer_weights: Tensor
-    """gamma_{b,l}, [B, L_levels]; the fused multi-level weighting."""
+    """gamma for hierarchical or alpha for shape-conditioned, [B, L_levels]."""
 
-    expert_layer_weights: Tensor
-    """beta_{b,k,l} over the active experts, [B, k_e, L_levels]."""
+    expert_layer_weights: Tensor | None
+    """beta_{b,k,l} for hierarchical mode; otherwise None."""
+
+    shape_fusion_layer_weights: Tensor | None
+    """Shape-conditioned alpha [B, L_levels]; otherwise None."""
 
     aux_norm_ratio: Tensor
     """||E_aux|| / ||E_enh|| per sample, [B]; how much the enhancement
     contributes to the decoder input (0 would mean the experts did nothing)."""
+
+    fused_token_norm: Tensor | None = None
+    """Per-sample L2 norm of the representation entering fusion/neck."""
+
+    enhanced_token_norm: Tensor | None = None
+    """Per-sample enhanced-token norm when the mode exposes one."""
 
 
 @register_model("phase_b_moe")
@@ -84,7 +98,13 @@ class PhaseBMoEStage(PhaseBRouterStage):
         std_floor: float = 1e-4,
         stochastic: bool = True,
         expert_hidden_ratio: int = 4,
+        enhancement_mode: str = "hierarchical",
     ) -> None:
+        if enhancement_mode not in ("hierarchical", "shape_conditioned"):
+            raise ValueError(
+                "enhancement_mode must be 'hierarchical' or "
+                f"'shape_conditioned', got {enhancement_mode!r}."
+            )
         super().__init__(
             in_channels=in_channels,
             num_classes=num_classes,
@@ -110,7 +130,13 @@ class PhaseBMoEStage(PhaseBRouterStage):
         )
         embed_dim = self.backbone.network.image_encoder.embed_dim
         num_levels = len(levels)
-        self.enhancement = HierarchicalMoEEnhancement(
+        self.enhancement_mode = enhancement_mode
+        enhancement_class = (
+            HierarchicalMoEEnhancement
+            if enhancement_mode == "hierarchical"
+            else ShapeConditionedFusionMoEEnhancement
+        )
+        self.enhancement = enhancement_class(
             embed_dim=embed_dim,
             num_experts=num_experts,
             num_levels=num_levels,
@@ -119,12 +145,7 @@ class PhaseBMoEStage(PhaseBRouterStage):
         )
         # Neck (Eq. 53): Z_fused [B, P, 768] -> spatial [B, 256, H_p, W_p]
         # to match SAM's image embedding. Mirrors neck5 in sam_moe.py.
-        self.enhancement_neck = nn.Sequential(
-            nn.Conv2d(embed_dim, descriptor_dim, kernel_size=1, bias=False),
-            LayerNorm2d(descriptor_dim),
-            nn.Conv2d(descriptor_dim, descriptor_dim, kernel_size=3, padding=1, bias=False),
-            LayerNorm2d(descriptor_dim),
-        )
+        self.enhancement_neck = build_enhancement_neck(embed_dim, descriptor_dim)
 
     def forward(
         self,
@@ -167,6 +188,7 @@ class PhaseBMoEStage(PhaseBRouterStage):
             "moe_expert_indices": indices,
             "image_descriptor": descriptor.descriptor,
             "level_weights": descriptor.level_weights,
+            "level_ids": self.image_descriptor.levels,
         }
         fuse_stage = None
         if masks is not None:
@@ -183,26 +205,46 @@ class PhaseBMoEStage(PhaseBRouterStage):
         )
         diagnostics["phase_b_router"] = router_stage
 
-        # 4. Routed enhancement (Eqs. 47-50): run experts on X^(l).
+        # 4. Routed enhancement. The default hierarchical path is unchanged;
+        # the controlled ablation fuses levels before sparse expert dispatch.
         level_tokens = descriptor.level_tokens  # raw X^(l), [B, P, 768]
-        # v^(l) = GAP(X^(l)): raw pooling, independent of the P_l-projected
-        # u^(l) the descriptor uses — g_layer sees unpooled geometry.
-        level_pools = torch.stack(
-            [tokens.mean(dim=1) for tokens in level_tokens], dim=1
-        )  # [B, L_levels, 768]
-
-        enhancement_out = self.enhancement(
-            level_tokens,
-            level_pools,
-            router_stage.latent,
-            router_stage.routing.routing_probs,
-            router_stage.routing.expert_indices,
-        )
+        if self.enhancement_mode == "hierarchical":
+            # v^(l) = GAP(X^(l)): raw pooling, independent of the P_l-projected
+            # u^(l) the descriptor uses — g_layer sees unpooled geometry.
+            level_pools = torch.stack(
+                [tokens.mean(dim=1) for tokens in level_tokens], dim=1
+            )  # [B, L_levels, 768]
+            enhancement_out = self.enhancement(
+                level_tokens,
+                level_pools,
+                router_stage.latent,
+                router_stage.routing.routing_probs,
+                router_stage.routing.expert_indices,
+            )
+            tokens_for_neck = enhancement_out.fused_tokens
+            expert_layer_weights = enhancement_out.expert_layer_weights
+            shape_fusion_layer_weights = None
+            enhanced_tokens_norm = enhanced_level_norm(
+                enhancement_out.enhanced_tokens
+            )
+        else:
+            enhancement_out = self.enhancement(
+                level_tokens,
+                router_stage.latent,
+                router_stage.routing.routing_probs,
+                router_stage.routing.expert_indices,
+            )
+            tokens_for_neck = enhancement_out.enhanced_fused_tokens
+            expert_layer_weights = None
+            shape_fusion_layer_weights = enhancement_out.layer_weights
+            enhanced_tokens_norm = token_norm(
+                enhancement_out.enhanced_fused_tokens
+            )
 
         # 5. Neck + residual injection (Eqs. 53-54).
         batch_size = images.shape[0]
-        patch_grid = int(enhancement_out.fused_tokens.shape[1] ** 0.5)
-        spatial = enhancement_out.fused_tokens.transpose(1, 2).reshape(
+        patch_grid = int(tokens_for_neck.shape[1] ** 0.5)
+        spatial = tokens_for_neck.transpose(1, 2).reshape(
             batch_size, self.enhancement.embed_dim, patch_grid, patch_grid
         )
         e_aux = self.enhancement_neck(spatial)  # [B, 256, H_p, W_p]
@@ -233,10 +275,13 @@ class PhaseBMoEStage(PhaseBRouterStage):
         diagnostics["iou_predictions"] = iou_predictions
         diagnostics["phase_b_moe"] = EnhancementStageOutput(
             layer_weights=enhancement_out.layer_weights,
-            expert_layer_weights=enhancement_out.expert_layer_weights,
+            expert_layer_weights=expert_layer_weights,
+            shape_fusion_layer_weights=shape_fusion_layer_weights,
             aux_norm_ratio=(
                 e_aux.flatten(1).norm(dim=1) / e_enh.flatten(1).norm(dim=1)
             ).detach(),
+            fused_token_norm=token_norm(enhancement_out.fused_tokens),
+            enhanced_token_norm=enhanced_tokens_norm,
         )
 
         return SegmentationOutput(logits=masks_out, diagnostics=diagnostics)

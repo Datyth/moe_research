@@ -7,7 +7,15 @@ from .base import (
 from .registry import build_model
 from .unet import UNetModel
 from .esam import EsamModel
-from .phase_b import PhaseBFuseStage, PhaseBMoEStage, PhaseBRouterStage
+from .phase_b import (
+    PhaseBA1NoExpertStage,
+    PhaseBA2DirectFuseStage,
+    PhaseBA4ShapeConditionedStage,
+    PhaseBFuseStage,
+    PhaseBMoEStage,
+    PhaseBNoMoEStage,
+    PhaseBRouterStage,
+)
 
 __all__ = [
     "BaseSegmentationModel",
@@ -15,8 +23,12 @@ __all__ = [
     "SegmentationPrediction",
     "UNetModel",
     "EsamModel",
+    "PhaseBA1NoExpertStage",
+    "PhaseBA2DirectFuseStage",
+    "PhaseBA4ShapeConditionedStage",
     "PhaseBFuseStage",
     "PhaseBRouterStage",
     "PhaseBMoEStage",
+    "PhaseBNoMoEStage",
     "build_model",
 ]
