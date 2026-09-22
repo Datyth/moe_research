@@ -28,10 +28,15 @@ SUPPORTED_TASKS = (
     "phase_b_fuse",
     "phase_b_router",
     "phase_b_moe",
+    "phase_c_distill",
 )
 # Model fields naming a file on disk; resolved against the project root so a
 # config stays runnable from any working directory.
-MODEL_PATH_FIELDS = ("checkpoint", "shape_teacher_checkpoint")
+MODEL_PATH_FIELDS = (
+    "checkpoint",
+    "shape_teacher_checkpoint",
+    "teacher_checkpoint",
+)
 
 
 def _require_mapping(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -252,6 +257,20 @@ def resolve_experiment_config(
             "task.lambda_balance",
             allow_zero=True,
         )
+    if task_config["name"] == "phase_c_distill":
+        task_config.setdefault("lambda_latent", 1.0)
+        task_config.setdefault("lambda_route", 1.0)
+        task_config.setdefault("lambda_deploy", 0.0)
+        for weight_name in (
+            "lambda_latent",
+            "lambda_route",
+            "lambda_deploy",
+        ):
+            task_config[weight_name] = _positive_float(
+                task_config[weight_name],
+                f"task.{weight_name}",
+                allow_zero=True,
+            )
 
     model = config["model"]
     _require_keys(model, "model", ("name",))

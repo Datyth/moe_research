@@ -122,7 +122,7 @@ class Trainer:
         """Run configured epochs and return dynamic metric history."""
 
         for epoch in range(self.start_epoch, self.config.epochs + 1):
-            train_loss = self._train_epoch(epoch)
+            train_loss, train_metrics = self._train_epoch(epoch)
             validation_metrics: dict[str, float] | None = None
             if self.val_loader is not None:
                 validation_metrics = evaluate(
@@ -137,7 +137,14 @@ class Trainer:
                         "by validation."
                     )
 
-            entry: HistoryEntry = {"epoch": epoch, "train_loss": train_loss}
+            entry: HistoryEntry = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                **{
+                    f"train_{name}": value
+                    for name, value in train_metrics.items()
+                },
+            }
             if validation_metrics is not None:
                 entry.update(
                     {
@@ -288,9 +295,11 @@ class Trainer:
         else:
             self.scheduler.step()
 
-    def _train_epoch(self, epoch: int) -> float:
+    def _train_epoch(self, epoch: int) -> tuple[float, dict[str, float]]:
         self.model.train()
         total_loss = 0.0
+        total_metrics: dict[str, float] = {}
+        expected_metric_keys: tuple[str, ...] | None = None
         total_samples = 0
         number_of_batches = len(self.train_loader)
 
@@ -305,6 +314,16 @@ class Trainer:
             validate_step_output(step)
             loss = step.loss
 
+            metric_keys = tuple(step.metrics)
+            if expected_metric_keys is None:
+                expected_metric_keys = metric_keys
+                total_metrics = {name: 0.0 for name in metric_keys}
+            elif set(metric_keys) != set(expected_metric_keys):
+                raise ValueError(
+                    "Task training metric keys changed across batches: "
+                    f"expected {sorted(expected_metric_keys)}, "
+                    f"got {sorted(metric_keys)}."
+                )
             self.scaler.scale(loss).backward()
             if self.config.gradient_clip_norm is not None:
                 self.scaler.unscale_(self.optimizer)
@@ -319,6 +338,14 @@ class Trainer:
 
             total_loss += loss.detach().item() * step.batch_size
             total_samples += step.batch_size
+            for name, value in step.metrics.items():
+                scalar = (
+                    float(value.detach().item())
+                    if isinstance(value, torch.Tensor)
+                    else float(value)
+                )
+                total_metrics[name] += scalar * step.batch_size
+
             if (
                 batch_number == 1
                 or batch_number % self.config.log_interval == 0
@@ -332,7 +359,10 @@ class Trainer:
 
         if total_samples == 0:
             raise ValueError("train_loader produced zero samples.")
-        return total_loss / total_samples
+        return total_loss / total_samples, {
+            name: total_metrics[name] / total_samples
+            for name in (expected_metric_keys or ())
+        }
 
     def _save_checkpoint(
         self,
@@ -382,6 +412,10 @@ class Trainer:
     def _print_epoch_summary(self, metrics: HistoryEntry) -> None:
         print(f"Epoch {metrics['epoch']}/{self.config.epochs} completed")
         print(f"Train Loss : {metrics['train_loss']:.6f}")
+        for name, value in metrics.items():
+            if name.startswith("train_") and name != "train_loss":
+                label = name[6:].replace("_", " ").title()
+                print(f"Train {label} : {value:.6f}")
         for name, value in metrics.items():
             if name.startswith("val_"):
                 label = name[4:].replace("_", " ").title()

@@ -7,6 +7,7 @@ from .phase_b_build_up import PhaseBBuildUpTask
 from .phase_b_fuse import PhaseBFuseTask
 from .phase_b_moe import PhaseBMoETask
 from .phase_b_router import PhaseBRouterTask
+from .phase_c_distill import PhaseCDistillTask
 from .segmentation import SegmentationTask
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "PhaseBFuseTask",
     "PhaseBMoETask",
     "PhaseBRouterTask",
+    "PhaseCDistillTask",
     "SegmentationTask",
 ]

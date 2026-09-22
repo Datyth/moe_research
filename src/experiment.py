@@ -29,6 +29,7 @@ from src.tasks import (
     PhaseBFuseTask,
     PhaseBMoETask,
     PhaseBRouterTask,
+    PhaseCDistillTask,
     SegmentationTask,
 )
 
@@ -39,6 +40,7 @@ TASK_REGISTRY = {
     "phase_b_fuse": PhaseBFuseTask,
     "phase_b_router": PhaseBRouterTask,
     "phase_b_moe": PhaseBMoETask,
+    "phase_c_distill": PhaseCDistillTask,
 }
 
 
@@ -363,6 +365,15 @@ def execute_experiment(
                 key: config["task"][key]
                 for key in ("evaluation_mode", "lambda_balance")
             }
+        elif task_name == "phase_c_distill":
+            task_kwargs = {
+                key: config["task"][key]
+                for key in (
+                    "lambda_latent",
+                    "lambda_route",
+                    "lambda_deploy",
+                )
+            }
         else:
             task_kwargs = {}
         task = task_class(
@@ -380,6 +391,18 @@ def execute_experiment(
         }
         if task_name == "phase_b_build_up":
             task_config.update(task_kwargs)
+        elif task_name == "phase_c_distill":
+            task_config.update(task_kwargs)
+
+        checkpoint_metadata = build_checkpoint_metadata(config, model_config)
+        phase_c_metadata = getattr(model, "phase_c_checkpoint_metadata", None)
+        if callable(phase_c_metadata):
+            phase_c_payload = phase_c_metadata()
+            phase_c_payload["loss_weights"] = {
+                name: task_kwargs[name]
+                for name in ("lambda_latent", "lambda_route", "lambda_deploy")
+            }
+            checkpoint_metadata["phase_c"] = phase_c_payload
 
         trainer = Trainer(
             model=model,
@@ -403,7 +426,7 @@ def execute_experiment(
                 monitor=str(training["monitor"]),
                 monitor_mode=str(training["monitor_mode"]),
             ),
-            checkpoint_metadata=build_checkpoint_metadata(config, model_config),
+            checkpoint_metadata=checkpoint_metadata,
         )
         if resume:
             trainer.resume(resolved_run_dir / "last.pt")
@@ -438,6 +461,11 @@ def execute_experiment(
         }
         if task_name == "phase_b_build_up":
             test_payload["evaluation_mode"] = task.evaluation_mode
+        elif task_name == "phase_c_distill":
+            test_payload["evaluation_mode"] = task.evaluation_mode
+            test_payload["teacher_evaluation_mode"] = (
+                task.teacher_evaluation_mode
+            )
         save_json(resolved_run_dir / "test_metrics.json", test_payload)
 
         metadata["status"] = "completed"

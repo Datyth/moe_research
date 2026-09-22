@@ -1,0 +1,29 @@
+# Main Phase C: distill the fixed privileged B6 posterior into p(z | I).
+# lambda_latent=1 and lambda_route=1 are runnable engineering defaults; the
+# proposal does not claim these exact numeric weights.
+extends: ../isic2018_e2.yaml
+
+experiment:
+  name: phase_c_b6_distill
+
+model:
+  name: phase_c_b6_distill
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  router_mode: learned
+  num_experts: 4
+  active_experts: 2
+  expert_hidden_ratio: 4
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+  latent_dim: 64
+  std_floor: 1.0e-4
+  stochastic: true
+  teacher_checkpoint: runs/phase_b_b6_hierarchical/20260921T151109Z_seed-42/best.pt
+
+task:
+  name: phase_c_distill
+  lambda_latent: 1.0
+  lambda_route: 1.0
+  lambda_deploy: 0.0

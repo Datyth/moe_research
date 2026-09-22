@@ -1,0 +1,7 @@
+extends: b6_distill_deploy.yaml
+
+experiment:
+  name: phase_c_b6_distill_deploy_100ep
+
+training:
+  epochs: 100

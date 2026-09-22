@@ -1,0 +1,9 @@
+extends: b6_distill.yaml
+
+experiment:
+  name: phase_c_b6_latent_only
+
+task:
+  lambda_latent: 1.0
+  lambda_route: 0.0
+  lambda_deploy: 0.0
