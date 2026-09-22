@@ -1,0 +1,8 @@
+# B6: Gaussian routing plus expert-conditioned beta/gamma level routing.
+extends: b5_gaussian.yaml
+
+experiment:
+  name: phase_b_b6_hierarchical
+
+model:
+  name: phase_b_b6_hierarchical

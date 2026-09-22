@@ -1,0 +1,15 @@
+# B4: privileged direct h_q routing, without Gaussian heads.
+extends: b3_image_moe.yaml
+
+experiment:
+  name: phase_b_b4_shape_direct
+
+model:
+  name: phase_b_b4_shape_direct
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+
+task:
+  name: phase_b_build_up
+  evaluation_mode: posterior_oracle
+  lambda_balance: 0.01

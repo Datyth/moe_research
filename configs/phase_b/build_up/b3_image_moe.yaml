@@ -1,0 +1,17 @@
+# B3: image-only learned Top-K routing over a sparse ExpertBank.
+extends: b1_multilevel.yaml
+
+experiment:
+  name: phase_b_b3_image_moe
+
+model:
+  name: phase_b_b3_image_moe
+  router_mode: learned
+  num_experts: 4
+  active_experts: 2
+  expert_hidden_ratio: 4
+
+task:
+  name: phase_b_build_up
+  evaluation_mode: image_only
+  lambda_balance: 0.01

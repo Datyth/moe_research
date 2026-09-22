@@ -25,6 +25,7 @@ from src.losses import build_loss
 from src.models import build_model
 from src.tasks import (
     PhaseBA1NoExpertTask,
+    PhaseBBuildUpTask,
     PhaseBFuseTask,
     PhaseBMoETask,
     PhaseBRouterTask,
@@ -34,6 +35,7 @@ from src.tasks import (
 TASK_REGISTRY = {
     "segmentation": SegmentationTask,
     "phase_b_a1_no_expert": PhaseBA1NoExpertTask,
+    "phase_b_build_up": PhaseBBuildUpTask,
     "phase_b_fuse": PhaseBFuseTask,
     "phase_b_router": PhaseBRouterTask,
     "phase_b_moe": PhaseBMoETask,
@@ -351,11 +353,18 @@ def execute_experiment(
         # mapping in one place while leaving a config's extra keys (e.g.
         # `name`) harmless: the constructor reads only what it knows.
         routing_tasks = ("phase_b_router", "phase_b_moe")
-        task_kwargs = (
-            {key: config["task"][key] for key in ("lambda_latent", "lambda_balance")}
-            if task_name in routing_tasks
-            else {}
-        )
+        if task_name in routing_tasks:
+            task_kwargs = {
+                key: config["task"][key]
+                for key in ("lambda_latent", "lambda_balance")
+            }
+        elif task_name == "phase_b_build_up":
+            task_kwargs = {
+                key: config["task"][key]
+                for key in ("evaluation_mode", "lambda_balance")
+            }
+        else:
+            task_kwargs = {}
         task = task_class(
             criterion=criterion,
             threshold=threshold,
@@ -369,6 +378,8 @@ def execute_experiment(
             "boundary_tolerance": boundary_tolerance,
             "task": dataset_config.task,
         }
+        if task_name == "phase_b_build_up":
+            task_config.update(task_kwargs)
 
         trainer = Trainer(
             model=model,
@@ -423,14 +434,10 @@ def execute_experiment(
         test_payload = {
             "checkpoint": "best.pt",
             "split": "test",
-            "loss": test_metrics["loss"],
-            "dice": test_metrics["dice"],
-            "iou": test_metrics["iou"],
-            "hd": test_metrics["hd"],
-            "hd95": test_metrics["hd95"],
-            "assd": test_metrics["assd"],
-            "boundary_f1": test_metrics["boundary_f1"],
+            **test_metrics,
         }
+        if task_name == "phase_b_build_up":
+            test_payload["evaluation_mode"] = task.evaluation_mode
         save_json(resolved_run_dir / "test_metrics.json", test_payload)
 
         metadata["status"] = "completed"

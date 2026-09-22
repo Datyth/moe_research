@@ -113,10 +113,12 @@ def evaluate(
 
     if total_samples == 0:
         raise ValueError("loader produced zero samples.")
-    return {
+    metrics = {
         "loss": total_loss / total_samples,
         **{
             name: total_metrics[name] / total_samples
             for name in (expected_metric_keys or ())
         },
     }
+    finalize = getattr(task, "finalize_evaluation_metrics", None)
+    return finalize(metrics) if callable(finalize) else metrics

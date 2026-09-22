@@ -24,6 +24,7 @@ EXPERIMENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 SUPPORTED_TASKS = (
     "segmentation",
     "phase_b_a1_no_expert",
+    "phase_b_build_up",
     "phase_b_fuse",
     "phase_b_router",
     "phase_b_moe",
@@ -238,6 +239,18 @@ def resolve_experiment_config(
         )
         task_config["lambda_balance"] = _positive_float(
             task_config["lambda_balance"], "task.lambda_balance", allow_zero=True
+        )
+    if task_config["name"] == "phase_b_build_up":
+        evaluation_mode = task_config.get("evaluation_mode")
+        if evaluation_mode not in {"image_only", "posterior_oracle"}:
+            raise ValueError(
+                "task.evaluation_mode must be image_only or posterior_oracle."
+            )
+        task_config.setdefault("lambda_balance", 0.0)
+        task_config["lambda_balance"] = _positive_float(
+            task_config["lambda_balance"],
+            "task.lambda_balance",
+            allow_zero=True,
         )
 
     model = config["model"]

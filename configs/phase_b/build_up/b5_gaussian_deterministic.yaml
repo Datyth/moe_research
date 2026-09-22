@@ -1,0 +1,8 @@
+# B5 control: route with posterior mean z=mu_q during training.
+extends: b5_gaussian.yaml
+
+experiment:
+  name: phase_b_b5_gaussian_deterministic
+
+model:
+  stochastic: false

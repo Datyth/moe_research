@@ -141,6 +141,14 @@ class SegmentationTask:
             "boundary_f1": boundary_f1.mean(),
         }
 
+    def finalize_evaluation_metrics(
+        self,
+        metrics: dict[str, float],
+    ) -> dict[str, float]:
+        """Finalize aggregated metrics; ordinary segmentation is identity."""
+
+        return metrics
+
     def evaluation_step(
         self,
         model: nn.Module,

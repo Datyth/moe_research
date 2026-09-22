@@ -27,6 +27,14 @@ from .shape_conditioned_enhancement import (
     ShapeConditionedFusionMoEEnhancement,
     ShapeConditionedFusionOutput,
 )
+from .studies.build_up import (
+    PhaseBB1MultiLevel,
+    PhaseBB2Dense,
+    PhaseBB3ImageMoE,
+    PhaseBB4ShapeDirect,
+    PhaseBB5Gaussian,
+    PhaseBB6Hierarchical,
+)
 
 __all__ = [
     "DEFAULT_LEVELS",
@@ -45,6 +53,12 @@ __all__ = [
     "PhaseBA1NoExpertStage",
     "PhaseBA2DirectFuseStage",
     "PhaseBA4ShapeConditionedStage",
+    "PhaseBB1MultiLevel",
+    "PhaseBB2Dense",
+    "PhaseBB3ImageMoE",
+    "PhaseBB4ShapeDirect",
+    "PhaseBB5Gaussian",
+    "PhaseBB6Hierarchical",
     "PhaseBFuseStage",
     "PhaseBMoEStage",
     "PhaseBNoMoEStage",

@@ -1,0 +1,8 @@
+# B3 control: identical sparse experts with uniform random Top-K routing.
+extends: b3_image_moe.yaml
+
+experiment:
+  name: phase_b_b3_random_topk
+
+model:
+  router_mode: random

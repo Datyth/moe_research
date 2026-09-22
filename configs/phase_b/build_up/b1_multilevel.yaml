@@ -1,0 +1,16 @@
+# B1: multi-level residual enhancement, no dense FFN or routing.
+extends: ../../isic2018_e2.yaml
+
+experiment:
+  name: phase_b_b1_multilevel
+
+model:
+  name: phase_b_b1_multilevel
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+
+task:
+  name: phase_b_build_up
+  evaluation_mode: image_only
+  lambda_balance: 0.0

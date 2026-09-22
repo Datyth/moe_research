@@ -1,0 +1,11 @@
+# B5: privileged posterior-only Gaussian latent routing.
+extends: b4_shape_direct.yaml
+
+experiment:
+  name: phase_b_b5_gaussian
+
+model:
+  name: phase_b_b5_gaussian
+  latent_dim: 64
+  std_floor: 1.0e-4
+  stochastic: true

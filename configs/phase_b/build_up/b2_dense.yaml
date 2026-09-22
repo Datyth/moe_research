@@ -1,0 +1,9 @@
+# B2: one shared parameter-matched dense FFN on every selected level.
+extends: b1_multilevel.yaml
+
+experiment:
+  name: phase_b_b2_dense
+
+model:
+  name: phase_b_b2_dense
+  dense_hidden_dim: 12292
