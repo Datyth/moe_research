@@ -23,6 +23,7 @@ from .phase_b import (
     PhaseBRouterStage,
 )
 from .phase_c import PhaseCB6PriorDistill
+from .joint_prior_posterior import JointPriorPosteriorB6
 
 __all__ = [
     "BaseSegmentationModel",
@@ -44,5 +45,6 @@ __all__ = [
     "PhaseBMoEStage",
     "PhaseBNoMoEStage",
     "PhaseCB6PriorDistill",
+    "JointPriorPosteriorB6",
     "build_model",
 ]

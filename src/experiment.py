@@ -24,6 +24,7 @@ from src.engine.schedulers import WarmupPolyLR
 from src.losses import build_loss
 from src.models import build_model
 from src.tasks import (
+    JointPriorPosteriorTask,
     PhaseBA1NoExpertTask,
     PhaseBBuildUpTask,
     PhaseBFuseTask,
@@ -41,6 +42,7 @@ TASK_REGISTRY = {
     "phase_b_router": PhaseBRouterTask,
     "phase_b_moe": PhaseBMoETask,
     "phase_c_distill": PhaseCDistillTask,
+    "joint_prior_posterior": JointPriorPosteriorTask,
 }
 
 
@@ -374,6 +376,16 @@ def execute_experiment(
                     "lambda_deploy",
                 )
             }
+        elif task_name == "joint_prior_posterior":
+            task_kwargs = {
+                key: config["task"][key]
+                for key in (
+                    "lambda_balance",
+                    "kl_beta_max",
+                    "kl_zero_until_epoch",
+                    "kl_ramp_end_epoch",
+                )
+            }
         else:
             task_kwargs = {}
         task = task_class(
@@ -392,6 +404,8 @@ def execute_experiment(
         if task_name == "phase_b_build_up":
             task_config.update(task_kwargs)
         elif task_name == "phase_c_distill":
+            task_config.update(task_kwargs)
+        elif task_name == "joint_prior_posterior":
             task_config.update(task_kwargs)
 
         checkpoint_metadata = build_checkpoint_metadata(config, model_config)

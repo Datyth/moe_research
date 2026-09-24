@@ -122,6 +122,9 @@ class Trainer:
         """Run configured epochs and return dynamic metric history."""
 
         for epoch in range(self.start_epoch, self.config.epochs + 1):
+            set_epoch = getattr(self.task, "set_epoch", None)
+            if callable(set_epoch):
+                set_epoch(epoch)
             train_loss, train_metrics = self._train_epoch(epoch)
             validation_metrics: dict[str, float] | None = None
             if self.val_loader is not None:

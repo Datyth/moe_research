@@ -29,6 +29,7 @@ SUPPORTED_TASKS = (
     "phase_b_router",
     "phase_b_moe",
     "phase_c_distill",
+    "joint_prior_posterior",
 )
 # Model fields naming a file on disk; resolved against the project root so a
 # config stays runnable from any working directory.
@@ -270,6 +271,38 @@ def resolve_experiment_config(
                 task_config[weight_name],
                 f"task.{weight_name}",
                 allow_zero=True,
+            )
+    if task_config["name"] == "joint_prior_posterior":
+        task_config.setdefault("lambda_balance", 0.01)
+        task_config.setdefault("kl_beta_max", 0.1)
+        task_config.setdefault("kl_zero_until_epoch", 5)
+        task_config.setdefault("kl_ramp_end_epoch", 20)
+        task_config["lambda_balance"] = _positive_float(
+            task_config["lambda_balance"],
+            "task.lambda_balance",
+            allow_zero=True,
+        )
+        task_config["kl_beta_max"] = _positive_float(
+            task_config["kl_beta_max"],
+            "task.kl_beta_max",
+            allow_zero=True,
+        )
+        task_config["kl_zero_until_epoch"] = _positive_int(
+            task_config["kl_zero_until_epoch"],
+            "task.kl_zero_until_epoch",
+            allow_zero=True,
+        )
+        task_config["kl_ramp_end_epoch"] = _positive_int(
+            task_config["kl_ramp_end_epoch"],
+            "task.kl_ramp_end_epoch",
+        )
+        if (
+            task_config["kl_zero_until_epoch"]
+            >= task_config["kl_ramp_end_epoch"]
+        ):
+            raise ValueError(
+                "task.kl_zero_until_epoch must be less than "
+                "task.kl_ramp_end_epoch."
             )
 
     model = config["model"]

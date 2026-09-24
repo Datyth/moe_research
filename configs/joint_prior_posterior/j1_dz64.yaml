@@ -1,0 +1,7 @@
+extends: common.yaml
+
+experiment:
+  name: phase_joint_j1_dz64
+
+model:
+  latent_dim: 64

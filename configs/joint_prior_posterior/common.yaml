@@ -1,0 +1,20 @@
+# Jointly train the privileged B6 posterior and deployable image-only prior.
+extends: ../phase_b/build_up/b6_hierarchical.yaml
+
+experiment:
+  name: joint_prior_posterior_base
+
+model:
+  name: joint_prior_posterior_b6
+  stochastic: false
+
+task:
+  name: joint_prior_posterior
+  lambda_balance: 0.01
+  kl_beta_max: 0.1
+  kl_zero_until_epoch: 5
+  kl_ramp_end_epoch: 20
+
+training:
+  monitor: dice
+  monitor_mode: max

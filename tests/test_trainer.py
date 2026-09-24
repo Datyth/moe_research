@@ -261,6 +261,19 @@ class TestTrainer(unittest.TestCase):
             self.assertFalse((root / "unet_best.pt").exists())
             self.assertEqual(set(history[0]), {"epoch", "train_loss"})
 
+    def test_optional_task_epoch_hook_is_called_before_each_epoch(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            trainer = build_tiny_trainer(
+                Path(temporary_directory),
+                with_validation=False,
+                epochs=3,
+            )
+            observed_epochs = []
+            trainer.task.set_epoch = observed_epochs.append
+            trainer.train()
+
+        self.assertEqual(observed_epochs, [1, 2, 3])
+
     def test_resume_restores_state_and_appends_history(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
