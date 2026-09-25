@@ -1,0 +1,34 @@
+# Controlled prior/posterior latent conditioning shared by C1/C2/C3.
+extends: ../isic2018_e2.yaml
+
+experiment:
+  name: latent_conditioning_base
+
+model:
+  name: latent_conditioning_model
+  image_size: 256
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+  latent_dim: 4
+  std_floor: 1.0e-4
+  stochastic: false
+  num_experts: 4
+  active_experts: 2
+  expert_hidden_ratio: 4
+  moe_context_dim: 256
+  latent_projection_dim: 64
+  use_post_moe_latent: true
+
+task:
+  name: latent_conditioning
+  lambda_balance: 0.01
+  kl_beta_max: 0.1
+  kl_zero_until_epoch: 5
+  kl_ramp_end_epoch: 20
+
+training:
+  monitor: dice
+  monitor_mode: max

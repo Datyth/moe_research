@@ -1,0 +1,10 @@
+# C5: adapt only the image-only student's expert and hierarchical routers.
+# Everything else, including the segmentation-only objective, is inherited
+# unchanged from C4.
+extends: loss_ablations/c4_seg_only.yaml
+
+experiment:
+  name: phase_c_c5_trainable_student_routing
+
+model:
+  name: phase_c_c5_trainable_student_routing

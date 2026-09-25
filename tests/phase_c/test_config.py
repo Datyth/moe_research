@@ -9,6 +9,7 @@ from scripts.evaluation.evaluate_phase_c_distill import _checkpoint_configuratio
 from src.configs.experiment import resolve_experiment_config
 from src.experiment import TASK_REGISTRY
 from src.models.registry import MODEL_REGISTRY
+from src.models.phase_c import PhaseCC5TrainableStudentRouting
 from src.tasks import PhaseCDistillTask
 
 
@@ -90,6 +91,7 @@ class TestPhaseCConfigs(unittest.TestCase):
             main["task"],
             {
                 "name": "phase_c_distill",
+                "latent_objective": "gaussian_kl",
                 "lambda_latent": 1.0,
                 "lambda_route": 1.0,
                 "lambda_deploy": 0.0,
@@ -157,11 +159,71 @@ class TestPhaseCConfigs(unittest.TestCase):
         wrong_model["metadata"]["model_config"]["name"] = (
             "phase_b_b6_hierarchical"
         )
-        with self.assertRaisesRegex(ValueError, "phase_c_b6_distill"):
+        with self.assertRaisesRegex(ValueError, "supported Phase-C"):
             _checkpoint_configuration(
                 wrong_model,
                 data_root=None,
             )
+
+    def test_c5_changes_only_student_routing_ownership(self):
+        c4 = load_experiment_config(
+            CONFIG_DIR / "loss_ablations/c4_seg_only.yaml",
+            project_root=PROJECT_ROOT,
+        )
+        c5 = self.configs["c5_trainable_student_routing"]
+
+        for section in (
+            "seed",
+            "dataset",
+            "task",
+            "loss",
+            "optimizer",
+            "scheduler",
+            "training",
+        ):
+            with self.subTest(section=section):
+                self.assertEqual(c5[section], c4[section])
+
+        c4_model = copy.deepcopy(c4["model"])
+        c5_model = copy.deepcopy(c5["model"])
+        self.assertEqual(c4_model.pop("name"), "phase_c_b6_distill")
+        self.assertEqual(
+            c5_model.pop("name"),
+            "phase_c_c5_trainable_student_routing",
+        )
+        self.assertEqual(c5_model, c4_model)
+        self.assertEqual(
+            c5["experiment"]["name"],
+            "phase_c_c5_trainable_student_routing",
+        )
+        self.assertEqual(
+            c5["experiment"]["output_root"],
+            c4["experiment"]["output_root"],
+        )
+        self.assertEqual(c5["training"]["epochs"], 100)
+        self.assertEqual(c5["training"]["monitor"], "dice")
+        self.assertEqual(c5["training"]["monitor_mode"], "max")
+        self.assertIs(
+            MODEL_REGISTRY["phase_c_c5_trainable_student_routing"],
+            PhaseCC5TrainableStudentRouting,
+        )
+
+        checkpoint = {
+            "metadata": {
+                "model_config": copy.deepcopy(c5["model"]),
+                "data_config": copy.deepcopy(c5["dataset"]),
+                "loss_config": copy.deepcopy(c5["loss"]),
+            },
+            "task_config": copy.deepcopy(c5["task"]),
+        }
+        model, _, _, _ = _checkpoint_configuration(
+            checkpoint,
+            data_root=None,
+        )
+        self.assertEqual(
+            model["name"],
+            "phase_c_c5_trainable_student_routing",
+        )
 
     def test_nonfinite_and_negative_phase_c_weights_fail_config_validation(self):
         main = self.configs["b6_distill"]

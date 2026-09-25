@@ -1,5 +1,6 @@
 """B6 hierarchical expert-layer routing tests."""
 
+import copy
 import unittest
 
 import torch
@@ -41,6 +42,49 @@ class TestB6(unittest.TestCase):
                 self.assertGreater(float(gradient.abs().sum()), 0.0)
             else:
                 self.assertTrue(gradient is None or float(gradient.abs().sum()) == 0.0)
+
+    def test_external_layer_scorer_matches_default_without_sharing(self):
+        torch.manual_seed(9)
+        module = HierarchicalMoEEnhancement(
+            embed_dim=12,
+            num_experts=3,
+            num_levels=2,
+            latent_dim=4,
+            expert_hidden_ratio=1,
+        ).eval()
+        external = copy.deepcopy(module.layer_scorer)
+        self.assertIsNot(external, module.layer_scorer)
+        self.assertNotEqual(
+            external.expert_embeddings.data_ptr(),
+            module.layer_scorer.expert_embeddings.data_ptr(),
+        )
+
+        tokens = tuple(torch.randn(2, 5, 12) for _ in range(2))
+        pools = torch.stack([value.mean(1) for value in tokens], dim=1)
+        latent = torch.randn(2, 4)
+        indices = torch.tensor([[0, 2], [1, 2]])
+        probs = torch.zeros(2, 3).scatter(1, indices, 0.5)
+        default = module(tokens, pools, latent, probs, indices)
+        overridden = module(
+            tokens,
+            pools,
+            latent,
+            probs,
+            indices,
+            layer_scorer=external,
+        )
+        torch.testing.assert_close(
+            default.fused_tokens,
+            overridden.fused_tokens,
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(
+            default.layer_weights,
+            overridden.layer_weights,
+            rtol=0,
+            atol=0,
+        )
 
 
 if __name__ == "__main__":

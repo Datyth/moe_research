@@ -84,7 +84,15 @@ class TinyPhaseCModel(nn.Module):
                 masks.shape[-1],
             )
 
+        prior_gamma = (
+            prior_routing.dense_probs if decode_prior else None
+        )
+        posterior_gamma = (
+            posterior_routing.dense_probs if decode_posterior else None
+        )
         state = PhaseCDistillationState(
+            prior_gamma=prior_gamma,
+            posterior_gamma=posterior_gamma,
             posterior=posterior,
             prior=prior,
             posterior_routing=posterior_routing,
@@ -218,6 +226,7 @@ class TestPhaseCTask(unittest.TestCase):
             "posterior_hd",
             "posterior_hd95",
             "posterior_assd",
+            "gamma_distance",
             "posterior_boundary_f1",
             "latent_kl",
             "mean_distance",

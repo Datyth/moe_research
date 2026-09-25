@@ -1,0 +1,12 @@
+extends: ../b6_distill_deploy_100ep.yaml
+
+experiment:
+  name: c1_balanced_kl
+  output_root: runs/phase_c_loss_ablations
+
+task:
+  name: phase_c_distill
+  latent_objective: gaussian_kl
+  lambda_latent: 0.001
+  lambda_route: 1.0
+  lambda_deploy: 1.0

@@ -2,6 +2,7 @@
 
 from .base import Task, TaskStepOutput
 from .joint_prior_posterior import JointPriorPosteriorTask
+from .latent_conditioning import LatentConditioningTask
 from .mask_reconstruction import MaskReconstructionTask
 from .phase_b_a1_no_expert import PhaseBA1NoExpertTask
 from .phase_b_build_up import PhaseBBuildUpTask
@@ -15,6 +16,7 @@ __all__ = [
     "Task",
     "TaskStepOutput",
     "JointPriorPosteriorTask",
+    "LatentConditioningTask",
     "MaskReconstructionTask",
     "PhaseBA1NoExpertTask",
     "PhaseBBuildUpTask",

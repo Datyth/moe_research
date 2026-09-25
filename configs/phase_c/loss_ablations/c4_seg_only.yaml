@@ -1,0 +1,12 @@
+extends: ../b6_distill_deploy_100ep.yaml
+
+experiment:
+  name: c4_seg_only
+  output_root: runs/phase_c_loss_ablations
+
+task:
+  name: phase_c_distill
+  latent_objective: none
+  lambda_latent: 0.0
+  lambda_route: 0.0
+  lambda_deploy: 1.0

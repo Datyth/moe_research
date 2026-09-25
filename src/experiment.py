@@ -25,6 +25,7 @@ from src.losses import build_loss
 from src.models import build_model
 from src.tasks import (
     JointPriorPosteriorTask,
+    LatentConditioningTask,
     PhaseBA1NoExpertTask,
     PhaseBBuildUpTask,
     PhaseBFuseTask,
@@ -43,6 +44,7 @@ TASK_REGISTRY = {
     "phase_b_moe": PhaseBMoETask,
     "phase_c_distill": PhaseCDistillTask,
     "joint_prior_posterior": JointPriorPosteriorTask,
+    "latent_conditioning": LatentConditioningTask,
 }
 
 
@@ -176,8 +178,19 @@ def build_optimizer(
     optimizer_config = config["optimizer"]
     if optimizer_config["name"] != "adamw":
         raise ValueError("Only optimizer.name='adamw' is supported.")
+    parameter_selector = getattr(model, "optimizer_parameters", None)
+    parameters = (
+        tuple(parameter_selector())
+        if callable(parameter_selector)
+        else tuple(model.parameters())
+    )
+    if not parameters:
+        raise ValueError("Optimizer requires at least one parameter.")
+    validator = getattr(model, "validate_optimizer_parameters", None)
+    if callable(validator):
+        validator(parameters)
     return torch.optim.AdamW(
-        model.parameters(),
+        parameters,
         lr=float(optimizer_config["lr"]),
         weight_decay=float(optimizer_config["weight_decay"]),
     )
@@ -252,16 +265,25 @@ def build_loaders(
 def build_checkpoint_metadata(
     config: dict[str, Any],
     model_config: dict[str, Any],
+    *,
+    git_commit: str | None = None,
+    git_dirty: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    metadata = {
         "experiment_name": config["experiment"]["name"],
         "seed": config["seed"],
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
         "model_config": model_config,
         "data_config": deepcopy(config["dataset"]),
         "loss_config": deepcopy(config["loss"]),
         "optimizer_config": deepcopy(config["optimizer"]),
         "scheduler_config": deepcopy(config["scheduler"]),
     }
+    ablation_id = config["experiment"].get("ablation_id")
+    if ablation_id is not None:
+        metadata["ablation_id"] = ablation_id
+    return metadata
 
 
 def execute_experiment(
@@ -321,6 +343,9 @@ def execute_experiment(
             "resume_count": 0,
             "config_fingerprint": config_fingerprint(config),
         }
+        ablation_id = config["experiment"].get("ablation_id")
+        if ablation_id is not None:
+            metadata["ablation_id"] = ablation_id
     metadata["status"] = "running"
     metadata.pop("error", None)
     metadata.pop("ended_at", None)
@@ -371,12 +396,13 @@ def execute_experiment(
             task_kwargs = {
                 key: config["task"][key]
                 for key in (
+                    "latent_objective",
                     "lambda_latent",
                     "lambda_route",
                     "lambda_deploy",
                 )
             }
-        elif task_name == "joint_prior_posterior":
+        elif task_name in ("joint_prior_posterior", "latent_conditioning"):
             task_kwargs = {
                 key: config["task"][key]
                 for key in (
@@ -405,18 +431,51 @@ def execute_experiment(
             task_config.update(task_kwargs)
         elif task_name == "phase_c_distill":
             task_config.update(task_kwargs)
-        elif task_name == "joint_prior_posterior":
+        elif task_name in ("joint_prior_posterior", "latent_conditioning"):
             task_config.update(task_kwargs)
 
-        checkpoint_metadata = build_checkpoint_metadata(config, model_config)
+        checkpoint_metadata = build_checkpoint_metadata(
+            config,
+            model_config,
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+        )
         phase_c_metadata = getattr(model, "phase_c_checkpoint_metadata", None)
         if callable(phase_c_metadata):
             phase_c_payload = phase_c_metadata()
+            phase_c_payload["latent_objective"] = task_kwargs[
+                "latent_objective"
+            ]
             phase_c_payload["loss_weights"] = {
                 name: task_kwargs[name]
                 for name in ("lambda_latent", "lambda_route", "lambda_deploy")
             }
             checkpoint_metadata["phase_c"] = phase_c_payload
+            metadata["phase_c"] = deepcopy(phase_c_payload)
+            save_json(metadata_path, metadata)
+
+        latent_conditioning_metadata = getattr(
+            model,
+            "latent_conditioning_checkpoint_metadata",
+            None,
+        )
+        if callable(latent_conditioning_metadata):
+            latent_conditioning_payload = latent_conditioning_metadata()
+            latent_conditioning_payload["loss_weights"] = {
+                name: task_kwargs[name]
+                for name in ("lambda_balance", "kl_beta_max")
+            }
+            latent_conditioning_payload["kl_schedule"] = {
+                name: task_kwargs[name]
+                for name in ("kl_zero_until_epoch", "kl_ramp_end_epoch")
+            }
+            checkpoint_metadata["latent_conditioning"] = (
+                latent_conditioning_payload
+            )
+            metadata["latent_conditioning"] = deepcopy(
+                latent_conditioning_payload
+            )
+            save_json(metadata_path, metadata)
 
         trainer = Trainer(
             model=model,
@@ -449,6 +508,35 @@ def execute_experiment(
         print(f"Experiment    : {config['experiment']['name']}")
         print(f"Seed          : {seed}")
         print(f"Device        : {training['device']}")
+        phase_c_counts = (
+            checkpoint_metadata.get("phase_c", {}).get("parameter_counts")
+        )
+        if isinstance(phase_c_counts, dict):
+            print(f"Parameters total     : {phase_c_counts['total']}")
+            print(f"Parameters trainable : {phase_c_counts['trainable']}")
+            print(f"Parameters frozen    : {phase_c_counts['frozen']}")
+            groups = phase_c_counts.get("trainable_groups", {})
+            if isinstance(groups, dict):
+                for name, count in groups.items():
+                    print(f"  {name:<22}: {count}")
+        latent_counts = (
+            checkpoint_metadata.get("latent_conditioning", {}).get(
+                "parameter_counts"
+            )
+        )
+        if isinstance(latent_counts, dict):
+            print(f"Parameters total     : {latent_counts['total']}")
+            print(f"Parameters trainable : {latent_counts['trainable']}")
+            print(f"Parameters frozen    : {latent_counts['frozen']}")
+            groups = latent_counts.get("groups", {})
+            if isinstance(groups, dict):
+                for name, counts in groups.items():
+                    if isinstance(counts, dict):
+                        print(
+                            f"  {name:<24}: "
+                            f"{counts.get('trainable', 0)} trainable / "
+                            f"{counts.get('total', 0)} total"
+                        )
         trainer.train()
 
         best_checkpoint_path = resolved_run_dir / "best.pt"

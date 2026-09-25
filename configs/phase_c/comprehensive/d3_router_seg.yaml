@@ -1,0 +1,8 @@
+extends: base.yaml
+
+experiment:
+  name: phase_c_d3_router_seg
+  ablation_id: D3
+
+model:
+  train_student_router: true

@@ -1,0 +1,10 @@
+extends: base.yaml
+
+experiment:
+  name: phase_c_d8_expert_coadapt_seg
+  ablation_id: D8
+
+model:
+  train_student_router: true
+  train_student_layer_router: true
+  train_student_experts: true

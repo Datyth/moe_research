@@ -1,0 +1,20 @@
+# Shared recipe for the Phase-C D3-D13 comprehensive sweep.
+extends: ../b6_distill_deploy_100ep.yaml
+
+experiment:
+  name: phase_c_comprehensive_base
+  output_root: runs/phase_c_comprehensive
+
+model:
+  name: phase_c_adaptive_student
+  train_student_router: false
+  train_student_layer_router: false
+  train_student_experts: false
+  train_student_image_descriptor: false
+
+task:
+  name: phase_c_distill
+  latent_objective: none
+  lambda_latent: 0.0
+  lambda_route: 0.0
+  lambda_deploy: 1.0

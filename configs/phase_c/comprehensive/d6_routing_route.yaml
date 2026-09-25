@@ -1,0 +1,12 @@
+extends: base.yaml
+
+experiment:
+  name: phase_c_d6_routing_route
+  ablation_id: D6
+
+model:
+  train_student_router: true
+  train_student_layer_router: true
+
+task:
+  lambda_route: 1.0

@@ -7,6 +7,7 @@ import torch
 from src.models.phase_b.posterior import DiagonalGaussian, gaussian_kl
 from src.models.phase_c.metrics import (
     categorical_routing_kl,
+    gamma_distance,
     latent_transfer_metrics,
     routing_js,
     topk_transfer_metrics,
@@ -66,6 +67,22 @@ class TestPhaseCMetrics(unittest.TestCase):
         self.assertTrue(torch.isfinite(forward))
         torch.testing.assert_close(forward, reverse)
         torch.testing.assert_close(routing_js(first, first), torch.tensor(0.0))
+
+    def test_gamma_distance_is_mean_l1_and_validates_shape(self):
+        teacher = torch.tensor([[0.5, 0.3, 0.2], [0.2, 0.3, 0.5]])
+        student = torch.tensor([[0.4, 0.4, 0.2], [0.1, 0.4, 0.5]])
+        expected = (teacher - student).abs().mean()
+        torch.testing.assert_close(
+            gamma_distance(teacher, student),
+            expected,
+        )
+        with self.assertRaisesRegex(ValueError, "share shape"):
+            gamma_distance(teacher, student[:, :2])
+        with self.assertRaisesRegex(FloatingPointError, "finite"):
+            gamma_distance(
+                teacher,
+                torch.full_like(student, float("nan")),
+            )
 
 
 if __name__ == "__main__":

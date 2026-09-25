@@ -153,8 +153,31 @@ def latent_transfer_metrics(
     }
 
 
+def gamma_distance(
+    teacher_gamma: Tensor,
+    student_gamma: Tensor,
+) -> Tensor:
+    """Mean L1 distance between teacher and student hierarchical routing."""
+
+    if teacher_gamma.ndim != 2 or student_gamma.ndim != 2:
+        raise ValueError("Teacher/student gamma must both be [B, L].")
+    if teacher_gamma.shape != student_gamma.shape:
+        raise ValueError(
+            "Teacher/student gamma must share shape, got "
+            f"{tuple(teacher_gamma.shape)} and {tuple(student_gamma.shape)}."
+        )
+    if not torch.isfinite(teacher_gamma).all():
+        raise FloatingPointError("teacher_gamma must be finite.")
+    if not torch.isfinite(student_gamma).all():
+        raise FloatingPointError("student_gamma must be finite.")
+    return (
+        teacher_gamma.detach() - student_gamma.detach()
+    ).abs().mean()
+
+
 __all__ = [
     "categorical_routing_kl",
+    "gamma_distance",
     "latent_transfer_metrics",
     "routing_js",
     "topk_transfer_metrics",

@@ -22,8 +22,13 @@ from .phase_b import (
     PhaseBNoMoEStage,
     PhaseBRouterStage,
 )
-from .phase_c import PhaseCB6PriorDistill
+from .phase_c import (
+    PhaseCAdaptiveStudent,
+    PhaseCB6PriorDistill,
+    PhaseCC5TrainableStudentRouting,
+)
 from .joint_prior_posterior import JointPriorPosteriorB6
+from .latent_conditioning import LatentConditioningModel
 
 __all__ = [
     "BaseSegmentationModel",
@@ -44,7 +49,10 @@ __all__ = [
     "PhaseBRouterStage",
     "PhaseBMoEStage",
     "PhaseBNoMoEStage",
+    "PhaseCAdaptiveStudent",
     "PhaseCB6PriorDistill",
+    "PhaseCC5TrainableStudentRouting",
     "JointPriorPosteriorB6",
+    "LatentConditioningModel",
     "build_model",
 ]

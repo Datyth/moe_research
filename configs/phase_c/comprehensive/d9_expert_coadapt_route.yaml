@@ -1,0 +1,13 @@
+extends: base.yaml
+
+experiment:
+  name: phase_c_d9_expert_coadapt_route
+  ablation_id: D9
+
+model:
+  train_student_router: true
+  train_student_layer_router: true
+  train_student_experts: true
+
+task:
+  lambda_route: 1.0

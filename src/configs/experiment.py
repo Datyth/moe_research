@@ -30,6 +30,7 @@ SUPPORTED_TASKS = (
     "phase_b_moe",
     "phase_c_distill",
     "joint_prior_posterior",
+    "latent_conditioning",
 )
 # Model fields naming a file on disk; resolved against the project root so a
 # config stays runnable from any working directory.
@@ -176,6 +177,15 @@ def resolve_experiment_config(
         raise ValueError(
             "experiment.name may contain only letters, numbers, '.', '_' and '-'."
         )
+    ablation_id = experiment.get("ablation_id")
+    if ablation_id is not None and (
+        not isinstance(ablation_id, str)
+        or not EXPERIMENT_NAME_PATTERN.fullmatch(ablation_id)
+    ):
+        raise ValueError(
+            "experiment.ablation_id may contain only letters, numbers, '.', "
+            "'_' and '-'."
+        )
     experiment["output_root"] = _resolve_path(
         experiment["output_root"], root, "experiment.output_root"
     )
@@ -259,9 +269,19 @@ def resolve_experiment_config(
             allow_zero=True,
         )
     if task_config["name"] == "phase_c_distill":
+        task_config.setdefault("latent_objective", "gaussian_kl")
         task_config.setdefault("lambda_latent", 1.0)
         task_config.setdefault("lambda_route", 1.0)
         task_config.setdefault("lambda_deploy", 0.0)
+        latent_objective = task_config["latent_objective"]
+        if (
+            not isinstance(latent_objective, str)
+            or latent_objective not in {"gaussian_kl", "mean_mse", "none"}
+        ):
+            raise ValueError(
+                "task.latent_objective must be one of: "
+                "gaussian_kl, mean_mse, none."
+            )
         for weight_name in (
             "lambda_latent",
             "lambda_route",
@@ -272,7 +292,25 @@ def resolve_experiment_config(
                 f"task.{weight_name}",
                 allow_zero=True,
             )
-    if task_config["name"] == "joint_prior_posterior":
+        if (
+            latent_objective == "none"
+            and task_config["lambda_latent"] != 0.0
+        ):
+            raise ValueError(
+                "task.lambda_latent must be 0 when "
+                "task.latent_objective is 'none'."
+            )
+        if all(
+            task_config[name] == 0.0
+            for name in ("lambda_latent", "lambda_route", "lambda_deploy")
+        ):
+            raise ValueError(
+                "Phase-C objective must enable at least one loss term."
+            )
+    if task_config["name"] in (
+        "joint_prior_posterior",
+        "latent_conditioning",
+    ):
         task_config.setdefault("lambda_balance", 0.01)
         task_config.setdefault("kl_beta_max", 0.1)
         task_config.setdefault("kl_zero_until_epoch", 5)

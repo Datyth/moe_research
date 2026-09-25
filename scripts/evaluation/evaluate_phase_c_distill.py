@@ -24,6 +24,13 @@ from src.models import build_model
 from src.tasks import PhaseCDistillTask
 
 
+SUPPORTED_PHASE_C_MODELS = {
+    "phase_c_adaptive_student": "PhaseCAdaptiveStudent",
+    "phase_c_b6_distill": "PhaseCB6PriorDistill",
+    "phase_c_c5_trainable_student_routing": "PhaseCC5TrainableStudentRouting",
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -53,9 +60,10 @@ def _checkpoint_configuration(
         for value in (model_config, data_config, loss_config, task_config)
     ):
         raise ValueError("Phase-C model/data/loss/task metadata is incomplete.")
-    if model_config.get("name") != "phase_c_b6_distill":
+    if model_config.get("name") not in SUPPORTED_PHASE_C_MODELS:
         raise ValueError(
-            "Evaluator requires model.name='phase_c_b6_distill'."
+            "Evaluator requires a supported Phase-C model.name; got "
+            f"{model_config.get('name')!r}."
         )
     if task_config.get("name") != "phase_c_distill":
         raise ValueError("Evaluator requires task.name='phase_c_distill'.")
@@ -106,14 +114,18 @@ def main() -> None:
     )
     if not isinstance(checkpoint, dict) or checkpoint.get("format_version") != 2:
         raise ValueError(f"Invalid Phase-C checkpoint: {checkpoint_path}")
-    if checkpoint.get("model_class") != "PhaseCB6PriorDistill":
-        raise ValueError(
-            "Evaluator requires model_class='PhaseCB6PriorDistill'."
-        )
 
     model_config, dataset_config, loss_config, task_config = (
         _checkpoint_configuration(checkpoint, data_root=args.data_root)
     )
+    expected_class = SUPPORTED_PHASE_C_MODELS[model_config["name"]]
+    if checkpoint.get("model_class") != expected_class:
+        raise ValueError(
+            "Phase-C model name/class mismatch: "
+            f"model.name={model_config['name']!r} requires "
+            f"model_class={expected_class!r}, got "
+            f"{checkpoint.get('model_class')!r}."
+        )
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable.")
@@ -136,6 +148,9 @@ def main() -> None:
         threshold=float(task_config.get("threshold", 0.5)),
         boundary_tolerance=float(task_config.get("boundary_tolerance", 2.0)),
         task=dataset_config.task,
+        latent_objective=str(
+            task_config.get("latent_objective", "gaussian_kl")
+        ),
         lambda_latent=float(task_config["lambda_latent"]),
         lambda_route=float(task_config["lambda_route"]),
         lambda_deploy=float(task_config["lambda_deploy"]),

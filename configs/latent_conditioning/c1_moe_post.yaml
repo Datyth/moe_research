@@ -1,0 +1,9 @@
+extends: common.yaml
+
+experiment:
+  name: latent_c1_moe_post_latent_04
+
+model:
+  use_moe: true
+  use_pre_moe_latent: false
+  use_post_moe_latent: true

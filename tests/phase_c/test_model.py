@@ -3,6 +3,7 @@
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from torch import nn
@@ -53,7 +54,7 @@ class _ForwardHarness(PhaseCB6PriorDistill):
         self.posterior_branch = _CallProbe()
         self.encoder_calls = 0
 
-    def _encode_images(self, images):
+    def _encode_images(self, images, *, include_teacher_descriptor=False):
         self.encoder_calls += 1
         return images
 
@@ -63,7 +64,19 @@ class _ForwardHarness(PhaseCB6PriorDistill):
         routing = self.router_for_test(prior.mean)
         return prior, routing
 
-    def _decode_routing(self, encoded, *, latent, routing):
+    def _prior_layer_scorer_module(self):
+        return self.frozen_dropout
+
+    def _decode_routing(
+        self,
+        encoded,
+        *,
+        latent,
+        routing,
+        layer_scorer,
+        descriptor=None,
+        expert_bank=None,
+    ):
         scalar = latent[:, :1] + routing.routing_probs[:, :1]
         logits = scalar[:, :, None, None].expand(
             -1,
@@ -72,7 +85,13 @@ class _ForwardHarness(PhaseCB6PriorDistill):
             encoded.shape[-1],
         )
         iou = scalar
-        return logits, iou
+        gamma = torch.softmax(
+            torch.stack([scalar[:, 0], -scalar[:, 0]], dim=1), dim=1
+        )
+        beta = gamma[:, None, :].expand(-1, 2, -1)
+        return SimpleNamespace(
+            logits=logits, iou_predictions=iou, gamma=gamma, beta=beta
+        )
 
     def distillation_forward(
         self,
@@ -103,22 +122,31 @@ class TestPhaseCModelAPI(unittest.TestCase):
         torch.manual_seed(3)
         model = _ForwardHarness().eval()
         images = torch.randn(2, 3, 4, 4)
-        masks = torch.randn(2, 1, 4, 4)
+        mask_a = torch.randn(2, 1, 4, 4)
+        mask_b = torch.randn(2, 1, 4, 4)
 
         without_mask = model(images)
-        with_mask = model(images, masks=masks)
+        with_mask_a = model(images, masks=mask_a)
+        with_mask_b = model(images, masks=mask_b)
 
         torch.testing.assert_close(
             without_mask.logits,
-            with_mask.prior_logits,
+            with_mask_a.prior_logits,
             rtol=0,
             atol=0,
         )
-        self.assertEqual(model.encoder_calls, 2)
+        torch.testing.assert_close(
+            without_mask.logits,
+            with_mask_b.prior_logits,
+            rtol=0,
+            atol=0,
+        )
+        self.assertEqual(model.encoder_calls, 3)
         self.assertEqual(model.shape_teacher.calls, 0)
         self.assertEqual(model.fusion.calls, 0)
         self.assertEqual(model.posterior_branch.calls, 0)
-        self.assertIsNone(with_mask.posterior_logits)
+        self.assertIsNone(with_mask_a.posterior_logits)
+        self.assertIsNone(with_mask_b.posterior_logits)
 
     def test_train_keeps_frozen_children_eval_and_prior_training(self):
         model = _ForwardHarness()

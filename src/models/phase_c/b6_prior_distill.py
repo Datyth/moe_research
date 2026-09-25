@@ -10,12 +10,14 @@ import torch
 from torch import Tensor, nn
 
 from src.models.base import SegmentationOutput
+from src.models.phase_b.experts import ExpertBank
 from src.models.phase_b.image_descriptor import (
     DEFAULT_LEVELS,
     MultiLevelImageDescriptorOutput,
 )
+from src.models.phase_b.layer_attention import LayerPreferenceScorer
 from src.models.phase_b.posterior import DiagonalGaussian, GaussianParameterHead
-from src.models.phase_b.router import RoutingOutput
+from src.models.phase_b.router import RoutingOutput, TopKRouter
 from src.models.phase_b.studies.build_up.b6_hierarchical import (
     PhaseBB6Hierarchical,
 )
@@ -36,6 +38,16 @@ EXPECTED_TEACHER_CLASS = "PhaseBB6Hierarchical"
 class _EncodedImageState:
     image_embeddings: Tensor
     descriptor: MultiLevelImageDescriptorOutput
+    teacher_descriptor: MultiLevelImageDescriptorOutput | None = None
+    block_outputs: tuple[Tensor, ...] | None = None
+
+
+@dataclass
+class _DecodedRoutingState:
+    logits: Tensor
+    iou_predictions: Tensor
+    gamma: Tensor
+    beta: Tensor
 
 
 @dataclass
@@ -50,6 +62,11 @@ class PhaseCDistillationState:
     posterior_logits: Tensor | None = None
     prior_iou_predictions: Tensor | None = None
     posterior_iou_predictions: Tensor | None = None
+
+    prior_gamma: Tensor | None = None
+    posterior_gamma: Tensor | None = None
+    prior_beta: Tensor | None = None
+    posterior_beta: Tensor | None = None
 
 
 @dataclass
@@ -248,6 +265,46 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         self.prior_head.train(mode)
         return self
 
+    @property
+    def teacher_router(self) -> TopKRouter:
+        """Frozen B6 expert router, exposed without registering an alias."""
+
+        return self.conditioner.router
+
+    @property
+    def teacher_layer_scorer(self) -> LayerPreferenceScorer:
+        """Frozen B6 layer router, exposed without registering an alias."""
+
+        return self.enhancement.layer_scorer
+
+    @property
+    def teacher_experts(self) -> ExpertBank:
+        """Frozen B6 expert bank, exposed without registering an alias."""
+
+        return self.enhancement.experts
+
+    def _prior_router_module(self) -> TopKRouter:
+        """Router used by the deployable prior path."""
+
+        return self.teacher_router
+
+    def _prior_layer_scorer_module(self) -> LayerPreferenceScorer:
+        """Layer scorer used by the deployable prior path."""
+
+        return self.teacher_layer_scorer
+
+    def _prior_expert_bank_module(self) -> ExpertBank | None:
+        """Expert bank used by the deployable prior path."""
+
+        enhancement = getattr(self, "enhancement", None)
+        return None if enhancement is None else enhancement.experts
+
+    def _teacher_expert_bank_module(self) -> ExpertBank | None:
+        """Expert bank used exclusively by privileged teacher diagnostics."""
+
+        enhancement = getattr(self, "enhancement", None)
+        return None if enhancement is None else enhancement.experts
+
     def phase_c_checkpoint_metadata(self) -> dict[str, Any]:
         total = sum(parameter.numel() for parameter in self.parameters())
         trainable = sum(
@@ -269,7 +326,12 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
             },
         }
 
-    def _encode_images(self, images: Tensor) -> _EncodedImageState:
+    def _encode_images(
+        self,
+        images: Tensor,
+        *,
+        include_teacher_descriptor: bool = False,
+    ) -> _EncodedImageState:
         with torch.no_grad():
             image_embeddings, block_outputs = run_sam_encoder(
                 self.backbone,
@@ -279,6 +341,10 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         return _EncodedImageState(
             image_embeddings=image_embeddings,
             descriptor=descriptor,
+            teacher_descriptor=(
+                descriptor if include_teacher_descriptor else None
+            ),
+            block_outputs=tuple(output.detach() for output in block_outputs),
         )
 
     def _posterior_from_encoded(
@@ -287,9 +353,14 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         masks: Tensor,
     ) -> tuple[DiagonalGaussian, RoutingOutput]:
         with torch.no_grad():
+            teacher_descriptor = (
+                encoded.teacher_descriptor
+                if encoded.teacher_descriptor is not None
+                else encoded.descriptor
+            )
             shape_latent = self.shape_teacher(masks)
             fused = self.fusion(
-                encoded.descriptor.descriptor,
+                teacher_descriptor.descriptor,
                 shape_latent,
             ).fused
             posterior = self.conditioner.posterior_head(fused)
@@ -301,7 +372,7 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         encoded: _EncodedImageState,
     ) -> tuple[DiagonalGaussian, RoutingOutput]:
         prior = self.prior_head(encoded.descriptor.descriptor.detach())
-        routing = self.conditioner.router(prior.mean)
+        routing = self._prior_router_module()(prior.mean)
         return prior, routing
 
     def _decode_routing(
@@ -310,8 +381,11 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         *,
         latent: Tensor,
         routing: RoutingOutput,
-    ) -> tuple[Tensor, Tensor]:
-        descriptor = encoded.descriptor
+        layer_scorer: LayerPreferenceScorer,
+        descriptor: MultiLevelImageDescriptorOutput | None = None,
+        expert_bank: ExpertBank | None = None,
+    ) -> _DecodedRoutingState:
+        descriptor = encoded.descriptor if descriptor is None else descriptor
         level_pools = torch.stack(
             [tokens.mean(dim=1) for tokens in descriptor.level_tokens],
             dim=1,
@@ -322,6 +396,8 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
             latent,
             routing.routing_probs,
             routing.expert_indices,
+            layer_scorer=layer_scorer,
+            expert_bank=expert_bank,
         )
         _, enhanced_embeddings = inject_enhancement(
             encoded.image_embeddings,
@@ -329,10 +405,16 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
             self.enhancement_neck,
             embed_dim=self.embed_dim,
         )
-        return decode_sam(
+        logits, iou_predictions = decode_sam(
             self.backbone,
             enhanced_embeddings,
             image_size=self.image_size,
+        )
+        return _DecodedRoutingState(
+            logits=logits,
+            iou_predictions=iou_predictions,
+            gamma=enhancement.layer_weights,
+            beta=enhancement.expert_layer_weights,
         )
 
     def distillation_forward(
@@ -347,30 +429,36 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
 
         if masks is None:
             raise ValueError("Phase-C distillation requires ground-truth masks.")
-        encoded = self._encode_images(images)
+        encoded = self._encode_images(
+            images,
+            include_teacher_descriptor=True,
+        )
         posterior, posterior_routing = self._posterior_from_encoded(
             encoded,
             masks,
         )
         prior, prior_routing = self._prior_from_encoded(encoded)
 
-        prior_logits = None
-        prior_iou = None
+        prior_decoded = None
         if decode_prior:
-            prior_logits, prior_iou = self._decode_routing(
+            prior_decoded = self._decode_routing(
                 encoded,
                 latent=prior.mean,
                 routing=prior_routing,
+                layer_scorer=self._prior_layer_scorer_module(),
+                expert_bank=self._prior_expert_bank_module(),
             )
 
-        posterior_logits = None
-        posterior_iou = None
+        posterior_decoded = None
         if decode_posterior:
             with torch.no_grad():
-                posterior_logits, posterior_iou = self._decode_routing(
+                posterior_decoded = self._decode_routing(
                     encoded,
                     latent=posterior.mean,
                     routing=posterior_routing,
+                    layer_scorer=self.teacher_layer_scorer,
+                    descriptor=encoded.teacher_descriptor,
+                    expert_bank=self._teacher_expert_bank_module(),
                 )
 
         return PhaseCDistillationState(
@@ -378,10 +466,28 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
             prior=prior,
             posterior_routing=posterior_routing,
             prior_routing=prior_routing,
-            prior_logits=prior_logits,
-            posterior_logits=posterior_logits,
-            prior_iou_predictions=prior_iou,
-            posterior_iou_predictions=posterior_iou,
+            prior_logits=(
+                None if prior_decoded is None else prior_decoded.logits
+            ),
+            posterior_logits=(
+                None if posterior_decoded is None else posterior_decoded.logits
+            ),
+            prior_iou_predictions=(
+                None if prior_decoded is None else prior_decoded.iou_predictions
+            ),
+            posterior_iou_predictions=(
+                None
+                if posterior_decoded is None
+                else posterior_decoded.iou_predictions
+            ),
+            prior_gamma=None if prior_decoded is None else prior_decoded.gamma,
+            posterior_gamma=(
+                None if posterior_decoded is None else posterior_decoded.gamma
+            ),
+            prior_beta=None if prior_decoded is None else prior_decoded.beta,
+            posterior_beta=(
+                None if posterior_decoded is None else posterior_decoded.beta
+            ),
         )
 
     def forward(
@@ -423,20 +529,24 @@ class PhaseCB6PriorDistill(PhaseBB6Hierarchical):
         # flag the public path must never touch privileged modules.
         encoded = self._encode_images(images)
         prior, prior_routing = self._prior_from_encoded(encoded)
-        prior_logits, prior_iou = self._decode_routing(
+        prior_decoded = self._decode_routing(
             encoded,
             latent=prior.mean,
             routing=prior_routing,
+            layer_scorer=self._prior_layer_scorer_module(),
+            expert_bank=self._prior_expert_bank_module(),
         )
         return PhaseCSegmentationOutput(
-            logits=prior_logits,
-            prior_logits=prior_logits,
+            logits=prior_decoded.logits,
+            prior_logits=prior_decoded.logits,
             diagnostics={
                 "phase_c_prior": {
                     "prior": prior,
                     "routing": prior_routing,
+                    "gamma": prior_decoded.gamma,
+                    "beta": prior_decoded.beta,
                 },
-                "prior_iou_predictions": prior_iou,
+                "prior_iou_predictions": prior_decoded.iou_predictions,
             },
         )
 

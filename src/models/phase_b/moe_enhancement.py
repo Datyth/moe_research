@@ -79,6 +79,9 @@ class HierarchicalMoEEnhancement(nn.Module):
         latent: Tensor,
         routing_probs: Tensor,
         expert_indices: Tensor,
+        *,
+        layer_scorer: LayerPreferenceScorer | None = None,
+        expert_bank: ExpertBank | None = None,
     ) -> EnhancementOutput:
         """Run the routed enhancement.
 
@@ -90,6 +93,15 @@ class HierarchicalMoEEnhancement(nn.Module):
             latent: z, [B, d_z].
             routing_probs: pi, [B, K]; sparse, zero off K_b, sums to 1.
             expert_indices: K_b, [B, k_e] (long).
+            layer_scorer: Optional scorer used for beta. When omitted, the
+                module's own scorer is used. Phase-C C5 supplies an
+                independently trainable student scorer while reusing this
+                module's frozen expert bank.
+            expert_bank: Optional expert bank used for routed refinement.
+                When omitted, the module's own bank is used. Adaptive Phase-C
+                students supply an independent bank when experts are
+                trainable, while the frozen teacher continues to use the
+                original B6 bank.
 
         Returns:
             EnhancementOutput with Z_fused [B, P, C].
@@ -114,10 +126,23 @@ class HierarchicalMoEEnhancement(nn.Module):
                 f"routing_probs must have K={self.num_experts}, got "
                 f"{routing_probs.shape[1]}."
             )
-        if expert_indices.ndim != 2 or expert_indices.shape[0] != routing_probs.shape[0]:
+        if (
+            expert_indices.ndim != 2
+            or expert_indices.shape[0] != routing_probs.shape[0]
+        ):
             raise ValueError(
                 "expert_indices must be [B, k_e] aligned with routing_probs, got "
                 f"{tuple(expert_indices.shape)}."
+            )
+
+        bank = self.experts if expert_bank is None else expert_bank
+        if (
+            bank.embed_dim != self.embed_dim
+            or bank.num_experts != self.num_experts
+        ):
+            raise ValueError(
+                "expert_bank architecture must match the hierarchical "
+                f"enhancement (C={self.embed_dim}, K={self.num_experts})."
             )
 
         batch_size = routing_probs.shape[0]
@@ -149,7 +174,8 @@ class HierarchicalMoEEnhancement(nn.Module):
         # pi over the active set only: [B, k_e], sums to 1.
         active_probs = routing_probs.gather(1, expert_indices)
         # beta for the active experts: [B, k_e, L_levels], softmax over levels.
-        beta = self.layer_scorer(level_pools, latent, expert_indices)
+        scorer = self.layer_scorer if layer_scorer is None else layer_scorer
+        beta = scorer(level_pools, latent, expert_indices)
 
         # --- Run ONLY the active experts (gather-then-run, not loop-over-K).
         # Group samples by expert so each expert runs as a single batched call
@@ -160,7 +186,10 @@ class HierarchicalMoEEnhancement(nn.Module):
 
         enhanced_levels = []
         layer_weights = torch.stack(
-            [(active_probs * beta[:, :, level]).sum(dim=1) for level in range(self.num_levels)],
+            [
+                (active_probs * beta[:, :, level]).sum(dim=1)
+                for level in range(self.num_levels)
+            ],
             dim=1,
         )  # gamma_{b,l} = sum_k pi_{b,k} beta_{b,k,l}  ->  [B, L_levels]
 
@@ -177,7 +206,7 @@ class HierarchicalMoEEnhancement(nn.Module):
                 sample_ids = slot_positions // num_active
                 slot_ids = slot_positions % num_active
                 # One batched expert call for all pairs assigned to it.
-                expert_out = self.experts.experts[int(expert_id)](
+                expert_out = bank.experts[int(expert_id)](
                     tokens[sample_ids]
                 )  # [n_pairs, P, C]
                 pair_weights = (
