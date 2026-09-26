@@ -1,0 +1,18 @@
+extends: ../isic2018_e3.yaml
+
+experiment:
+  name: isic2018_moe_sam_post_latent_mean
+
+model:
+  name: moe_sam_post_latent_mean
+  descriptor_dim: 256
+  levels: [3, 6, 9, 12]
+  scoring_hidden_dim: 64
+  shape_teacher_checkpoint: "~/projects/project_01/nhan/moe_research/runs/phase_a_s0_small_cnn_10ep/20260910T185518Z_seed-42/best.pt"
+  freeze_shape_teacher: true
+  latent_dim: 8
+  latent_projection_dim: 64
+
+task:
+  name: moe_sam_post_latent_mean
+  lambda_mean_align: 1.0
